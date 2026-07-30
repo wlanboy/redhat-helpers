@@ -1,0 +1,47 @@
+# kind-cluster-config.yaml
+#
+# Wird direkt gepflegt (nicht vom Skript generiert) und von install-kind.sh
+# über "kind create cluster --config kind-cluster-config.yaml" verwendet.
+#
+# Für jede Upstream-Registry, die über Nexus/Artifactory gespiegelt werden
+# soll, einen eigenen Mirror-Block unter containerdConfigPatches ergänzen.
+# Nicht benötigte Upstreams einfach entfernen.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: kind
+networking:
+  ipFamily: ipv4
+  apiServerAddress: "127.0.0.1"
+  apiServerPort: 6443
+  # kollidiert weder mit Podmans
+  # rootful Default-Bridge (10.88.0.0/16, netavark) noch mit typischen
+  # Host-LANs auf 192.168.x.x, wie sie auf RHEL9-Servern häufig sind.
+  podSubnet: "10.244.0.0/16"
+  serviceSubnet: "10.96.0.0/12"
+  disableDefaultCNI: false
+  kubeProxyMode: "iptables"
+containerdConfigPatches:
+  - |-
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."docker.io"]
+      endpoint = ["https://nexus.example.com:5000"]
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."registry.k8s.io"]
+      endpoint = ["https://nexus.example.com:5000"]
+    [plugins."io.containerd.grpc.v1.cri".registry.mirrors."quay.io"]
+      endpoint = ["https://nexus.example.com:5000"]
+nodes:
+  - role: control-plane
+    kubeadmConfigPatches:
+      - |
+        kind: InitConfiguration
+        nodeRegistration:
+          kubeletExtraArgs:
+            node-labels: "ingress-ready=true"
+    kubeadmConfigPatchesJSON6902:
+      - group: kubeadm.k8s.io
+        version: v1beta3
+        kind: ClusterConfiguration
+        patch: |
+          - op: add
+            path: /apiServer/certSANs/-
+            value: 127.0.0.1
+  - role: worker
