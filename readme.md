@@ -15,6 +15,10 @@ von Containern via Podman und Kubernetes-Test-Clustern via kind.
   insecure SSL und unqualified-search-registry) sowie ein eigenes
   Storage-Verzeichnis (graphroot) inklusive SELinux-Labeling. Muss als
   root ausgeführt werden.
+- **manage-user-units.sh** – Listet alle systemd User Units
+  (`systemctl --user`) durchnummeriert auf und bietet an, alle Units oder
+  eine einzelne per Nummer zu starten, zu stoppen oder neu zu starten.
+  Läuft im normalen User-Kontext, kein root nötig.
 
 ### kind/
 
@@ -44,6 +48,9 @@ sudo scripts/install-podman.sh
 
 # 3. kind-Cluster mit Podman-Provider aufsetzen
 sudo kind/install-kind.sh
+
+# 4. User Units verwalten (start/stop/restart)
+scripts/manage-user-units.sh
 ```
 
 ## Lizenz
