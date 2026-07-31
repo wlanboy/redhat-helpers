@@ -19,6 +19,11 @@ von Containern via Podman und Kubernetes-Test-Clustern via kind.
   (`systemctl --user`) durchnummeriert auf und bietet an, alle Units oder
   eine einzelne per Nummer zu starten, zu stoppen oder neu zu starten.
   Läuft im normalen User-Kontext, kein root nötig.
+- **show-journal-errors.sh** – Fragt interaktiv einen Zeitraum ab (letzte
+  Stunde/24h/7 Tage/seit Boot/eigene Angabe) und zeigt Journal-Einträge
+  mit Priorität err oder höher: erst eine Zusammenfassung mit Fehleranzahl
+  pro Unit, danach die vollständigen Log-Einträge. Braucht Lesezugriff auf
+  das System-Journal, ggf. mit sudo ausführen.
 
 ### kind/
 
@@ -51,6 +56,9 @@ sudo kind/install-kind.sh
 
 # 4. User Units verwalten (start/stop/restart)
 scripts/manage-user-units.sh
+
+# 5. Journal nach Fehlern durchsuchen
+scripts/show-journal-errors.sh
 ```
 
 ## Lizenz
