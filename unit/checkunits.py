@@ -24,14 +24,14 @@ und "journalctl --user". Kompatibel zu Python 3.9.
 import argparse
 import subprocess
 import sys
-from typing import Dict, List
+from typing import Any, Dict, List, NoReturn
 
 
 def error(message: str) -> None:
     print("Fehler: {0}".format(message), file=sys.stderr)
 
 
-def die(message: str) -> None:
+def die(message: str) -> NoReturn:
     error(message)
     sys.exit(2)
 
@@ -88,7 +88,7 @@ def journal_lines(unit: str, priority: str, since: str, limit: int) -> List[str]
     ]
 
 
-def print_section(title: str, entries: List[Dict[str, object]]) -> None:
+def print_section(title: str, entries: List[Dict[str, Any]]) -> None:
     print()
     print("== {0} ({1}) ==".format(title, len(entries)))
     if not entries:

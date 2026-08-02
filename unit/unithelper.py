@@ -34,7 +34,7 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import List, NoReturn, Optional
 
 ACTIONS = ("start", "stop", "status", "restart", "enable", "disable", "delete")
 UNIT_DIR = Path.home() / ".config" / "systemd" / "user"
@@ -44,7 +44,7 @@ def error(message: str) -> None:
     print("Fehler: {0}".format(message), file=sys.stderr)
 
 
-def die(message: str) -> None:
+def die(message: str) -> NoReturn:
     error(message)
     sys.exit(1)
 
