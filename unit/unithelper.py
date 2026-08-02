@@ -12,6 +12,10 @@ aus ~/.config/systemd/user/ und fuehrt anschliessend
 "systemctl --user daemon-reload" aus. Vor dem Loeschen wird immer
 nochmal explizit nachgefragt.
 
+Optional kann ein Filter-Text angegeben werden, um nur Units
+anzuzeigen, deren Name diesen Text enthaelt (Gross-/Kleinschreibung
+wird ignoriert).
+
 Aufruf:
   unithelper.py start
   unithelper.py stop
@@ -20,6 +24,7 @@ Aufruf:
   unithelper.py enable
   unithelper.py disable
   unithelper.py delete
+  unithelper.py status ubuntu
 
 Laeuft im User-Kontext (kein root, kein sudo) gegen "systemctl --user".
 Kompatibel zu Python 3.9.
@@ -146,12 +151,24 @@ def main() -> None:
         )
     )
     parser.add_argument("action", choices=ACTIONS, help="Auszufuehrende Aktion")
+    parser.add_argument(
+        "filter",
+        nargs="?",
+        default=None,
+        help="Nur Units anzeigen, deren Name diesen Text enthaelt",
+    )
     args = parser.parse_args()
 
     units = list_units()
     if not units:
         print("Keine User Units gefunden.")
         sys.exit(0)
+
+    if args.filter:
+        units = [u for u in units if args.filter.lower() in u.lower()]
+        if not units:
+            print("Keine User Units gefunden, die '{0}' enthalten.".format(args.filter))
+            sys.exit(0)
 
     print_units(units)
 
