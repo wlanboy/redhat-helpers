@@ -18,23 +18,14 @@ Java- (JAR) oder Python-Anwendung:
 Kompatibel zu Python 3.9 (kein match-Statement, keine X | Y Type-Hints).
 """
 
-import subprocess
 import sys
 from pathlib import Path
 from typing import Optional
 
 from envstore import add_entry, get_version, load_environments, save_environments
+from helper import die, error, run_systemctl
 
 UNIT_DIR = Path.home() / ".config" / "systemd" / "user"
-
-
-def error(message: str) -> None:
-    print("Fehler: {0}".format(message), file=sys.stderr)
-
-
-def die(message: str) -> None:
-    error(message)
-    sys.exit(1)
 
 
 def ask(prompt: str, default: Optional[str] = None, required: bool = False) -> str:
@@ -215,18 +206,6 @@ def build_exec_start(
     if app_params:
         parts.append(app_params)
     return " ".join(parts)
-
-
-def run_systemctl(args) -> bool:
-    try:
-        subprocess.run(["systemctl", "--user"] + args, check=True)
-        return True
-    except FileNotFoundError:
-        error("systemctl wurde nicht gefunden.")
-        return False
-    except subprocess.CalledProcessError as exc:
-        error("systemctl {0} fehlgeschlagen ({1}).".format(" ".join(args), exc))
-        return False
 
 
 def main() -> None:

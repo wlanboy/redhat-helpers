@@ -24,51 +24,9 @@ und "journalctl --user". Kompatibel zu Python 3.9.
 import argparse
 import subprocess
 import sys
-from typing import Any, Dict, List, NoReturn
+from typing import Any, Dict, List
 
-
-def error(message: str) -> None:
-    print("Fehler: {0}".format(message), file=sys.stderr)
-
-
-def die(message: str) -> NoReturn:
-    error(message)
-    sys.exit(2)
-
-
-def list_units() -> List[Dict[str, str]]:
-    try:
-        proc = subprocess.run(
-            [
-                "systemctl", "--user", "list-units", "--type=service", "--all",
-                "--no-legend", "--plain",
-            ],
-            capture_output=True, text=True, check=True,
-        )
-    except FileNotFoundError:
-        die("systemctl wurde nicht gefunden.")
-    except subprocess.CalledProcessError as exc:
-        die("Konnte User Units nicht auflisten ({0}).".format(exc))
-
-    units = []
-    for line in proc.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split(None, 4)
-        while len(parts) < 5:
-            parts.append("")
-        name, load, active, sub, description = parts[:5]
-        units.append(
-            {
-                "name": name,
-                "load": load,
-                "active": active,
-                "sub": sub,
-                "description": description,
-            }
-        )
-    return units
+from helper import list_units
 
 
 def journal_lines(unit: str, priority: str, since: str, limit: int) -> List[str]:
@@ -121,7 +79,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    units = list_units()
+    units = list_units(die_code=2)
     if not units:
         print("Keine User Units gefunden.")
         sys.exit(0)

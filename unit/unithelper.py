@@ -34,42 +34,16 @@ import argparse
 import subprocess
 import sys
 from pathlib import Path
-from typing import List, NoReturn, Optional
+from typing import List, Optional
+
+from helper import die, error, list_units as _list_units
 
 ACTIONS = ("start", "stop", "status", "restart", "enable", "disable", "delete")
 UNIT_DIR = Path.home() / ".config" / "systemd" / "user"
 
 
-def error(message: str) -> None:
-    print("Fehler: {0}".format(message), file=sys.stderr)
-
-
-def die(message: str) -> NoReturn:
-    error(message)
-    sys.exit(1)
-
-
 def list_units() -> List[str]:
-    try:
-        proc = subprocess.run(
-            [
-                "systemctl", "--user", "list-units", "--type=service", "--all",
-                "--no-legend", "--plain",
-            ],
-            capture_output=True, text=True, check=True,
-        )
-    except FileNotFoundError:
-        die("systemctl wurde nicht gefunden.")
-    except subprocess.CalledProcessError as exc:
-        die("Konnte User Units nicht auflisten ({0}).".format(exc))
-
-    units = []
-    for line in proc.stdout.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        units.append(line.split()[0])
-    return units
+    return [unit["name"] for unit in _list_units()]
 
 
 def print_units(units: List[str]) -> None:
