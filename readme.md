@@ -25,6 +25,13 @@ von Containern via Podman und Kubernetes-Test-Clustern via kind.
   pro Unit, danach die vollständigen Log-Einträge. Braucht Lesezugriff auf
   das System-Journal, ggf. mit sudo ausführen.
 
+### unit/
+
+Python-Pendant zu `manage-user-units.sh` mit mehr Funktionsumfang
+(enable/disable/delete, Namensfilter, Fehler-/Warnungs-Check per
+Journal, Unit-Generator für Java-/Python-Anwendungen). Siehe
+[unit/userunits.md](unit/userunits.md).
+
 ### kind/
 
 - **install-kind.sh** – Richtet einen kind-Cluster (Kubernetes IN Docker)
