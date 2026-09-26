@@ -32,6 +32,14 @@ Python-Pendant zu `manage-user-units.sh` mit mehr Funktionsumfang
 Journal, Unit-Generator für Java-/Python-Anwendungen). Siehe
 [unit/userunits.md](unit/userunits.md).
 
+### rabbitmq/
+
+Erlang/OTP auf einer Build-VM als non-root bauen und als Tarball in Nexus
+ablegen, RabbitMQ (Generic-Unix-Tarball) auf mehreren Runtime-VMs als
+systemd User Unit betreiben, alles offline über Nexus. Siehe
+[rabbitmq/readme.md](rabbitmq/readme.md) und die Nexus-Anforderungen in
+[rabbitmq/requirements.md](rabbitmq/requirements.md).
+
 ### kind/
 
 - **install-kind.sh** – Richtet einen kind-Cluster (Kubernetes IN Docker)
