@@ -46,6 +46,12 @@ Valkey (fertiger jammy-Build von download.valkey.io) über einen Nexus
 Raw-Proxy laden und als systemd User Unit betreiben. Siehe
 [valkey/readme.md](valkey/readme.md).
 
+### valkeycluster/
+
+Valkey im Cluster-Modus mit mehreren Instanzen pro VM
+(`valkey-cluster@<port>` User Units), Primaries und Replicas über mehrere
+VMs verteilt. Siehe [valkeycluster/readme.md](valkeycluster/readme.md).
+
 ### kind/
 
 - **install-kind.sh** – Richtet einen kind-Cluster (Kubernetes IN Docker)
