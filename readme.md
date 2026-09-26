@@ -48,9 +48,10 @@ Raw-Proxy laden und als systemd User Unit betreiben. Siehe
 
 ### postgres/
 
-PostgreSQL aus den fertigen PGDG-RPMs für RHEL 9 (über einen Nexus-Proxy)
-als User entpacken, ohne Installation per dnf, und als systemd User Unit
-betreiben, inklusive Anleitung für Minor- und Major-Upgrades. Siehe
+PostgreSQL aus den fertigen PGDG-RPMs für RHEL 9: Build-VM prüft die
+Signatur und legt einen verschiebbaren Tarball in Nexus ab, die Runtime-VMs
+entpacken ihn als User (ohne dnf) und betreiben ihn als systemd User Unit,
+inklusive Anleitung für Minor- und Major-Upgrades. Siehe
 [postgres/readme.md](postgres/readme.md).
 
 ### valkeycluster/

@@ -1,17 +1,14 @@
 #!/usr/bin/env bash
 #
-# install-postgres.sh
+# install.sh
 #
-# Installiert PostgreSQL aus den fertigen PGDG-RPMs für RHEL 9 (über einen
-# Nexus-Proxy auf download.postgresql.org) als normaler User und richtet
+# Installiert PostgreSQL auf einer Runtime-VM als normaler User und richtet
 # eine systemd User Unit ein:
-#   - lädt postgresql<MAJOR>{,-libs,-server,-contrib}-<PG_VERSION>-<PG_RPM_RELEASE>
-#     aus Nexus und prüft die RPM-Signatur gegen den PGDG-Key
-#     (User-eigene rpm-Datenbank, kein root)
-#   - entpackt die RPMs per rpm2archive (ohne sie zu installieren) nach
-#     $PG_BASE/server/postgresql-<PG_VERSION>/, Symlink server/current auf
-#     die neue Version (alte Versionen bleiben liegen, Minor-Upgrade =
-#     Skript mit neuer Version)
+#   - lädt postgresql-<PG_VERSION>-el9-<arch>.tar.gz (erzeugt von build.sh)
+#     aus dem Nexus Raw-Hosted-Repo und prüft den SHA256
+#   - entpackt nach $PG_BASE/server/postgresql-<PG_VERSION>/, Symlink
+#     server/current auf die neue Version (alte Versionen bleiben liegen,
+#     Minor-Upgrade = Skript mit neuer Version)
 #   - prüft per ldd, ob alle System-Bibliotheken vorhanden sind
 #   - initdb einmalig nach data/<MAJOR> (Passwort: PG_PASSWORD, interaktiv
 #     oder zufällig erzeugt, landet in ~/.pgpass)
@@ -38,7 +35,7 @@ if [[ $EUID -eq 0 ]]; then
     exit 1
 fi
 
-for cmd in curl tar rpm2archive rpmkeys ldd systemctl; do
+for cmd in curl tar gzip sha256sum ldd systemctl; do
     if ! command -v "$cmd" &>/dev/null; then
         echo "Fehler: '$cmd' nicht gefunden." >&2
         exit 1
@@ -80,50 +77,29 @@ download() {
 
 # ---------------------------------------------------------------- Download
 
-echo "== PostgreSQL ${PG_VERSION} (${PG_RPM_RELEASE}, ${PG_ARCH}) =="
-RPMS=()
-for pkg in "${PG_PACKAGES[@]}"; do
-    rpm_file="${pkg}-${PG_VERSION}-${PG_RPM_RELEASE}.${PG_ARCH}.rpm"
-    download "${NEXUS_PGDG}/${PG_RPM_PATH}/${rpm_file}" "${DL_DIR}/${rpm_file}"
-    RPMS+=("${DL_DIR}/${rpm_file}")
-done
-
-if [[ "$PG_GPG_CHECK" =~ ^[JjYy]$ ]]; then
-    KEY_FILE="${DL_DIR}/$(basename "$PG_GPG_KEY_PATH")"
-    download "${NEXUS_PGDG}/${PG_GPG_KEY_PATH}" "$KEY_FILE"
-    # Eigene rpm-Datenbank nur für die Prüfung, die System-DB bleibt unberührt
-    KEY_DB="${DL_DIR}/rpmdb"
-    rm -rf "$KEY_DB"
-    mkdir -p "$KEY_DB"
-    rpmkeys --dbpath "$KEY_DB" --import "$KEY_FILE"
-    for f in "${RPMS[@]}"; do
-        if ! rpmkeys --dbpath "$KEY_DB" -K "$f"; then
-            echo "Fehler: Signatur von $(basename "$f") ungültig, Datei wird gelöscht." >&2
-            rm -f "$f"
-            exit 1
-        fi
-    done
-    rm -rf "$KEY_DB"
-    echo "Signaturen ok."
-else
-    echo "Warnung: PG_GPG_CHECK=n, keine Signaturprüfung." >&2
+echo "== PostgreSQL ${PG_VERSION} (${PG_ARCH}) =="
+PG_URL="${NEXUS_BUILDS}/postgresql/${PG_VERSION}/${PG_TARBALL}"
+download "$PG_URL" "${DL_DIR}/${PG_TARBALL}"
+download "${PG_URL}.sha256" "${DL_DIR}/${PG_TARBALL}.sha256"
+if ! (cd "$DL_DIR" && sha256sum -c "${PG_TARBALL}.sha256"); then
+    echo "Fehler: SHA256 stimmt nicht, Download wird gelöscht." >&2
+    rm -f "${DL_DIR}/${PG_TARBALL}" "${DL_DIR}/${PG_TARBALL}.sha256"
+    exit 1
 fi
 
 if [[ -d "$SRV_DIR" ]]; then
     echo "Bereits entpackt: $SRV_DIR"
 else
+    # Erst in ein temporäres Verzeichnis, damit ein abgebrochenes Entpacken
+    # kein halbes server/postgresql-<VERSION> hinterlässt.
     TMP_DIR=$(mktemp -d "${BASE}/server/.extract.XXXXXX")
     trap 'rm -rf "$TMP_DIR"' EXIT
-    for f in "${RPMS[@]}"; do
-        rpm2archive - < "$f" | tar -C "$TMP_DIR" -xz
-    done
-    # Die RPMs installieren nach /usr/pgsql-<MAJOR>. PostgreSQL findet share/
-    # und lib/ relativ zum Binary, das Verzeichnis ist daher verschiebbar.
-    # Alles außerhalb (systemd-Units, /usr/bin-Links) wird verworfen.
-    mv "${TMP_DIR}/usr/pgsql-${PG_MAJOR}" "$SRV_DIR"
+    tar -C "$TMP_DIR" -xzf "${DL_DIR}/${PG_TARBALL}"
+    mv "${TMP_DIR}/${PG_NAME}" "$SRV_DIR"
     rm -rf "$TMP_DIR"
     trap - EXIT
 fi
+[[ -f "${SRV_DIR}/BUILD_INFO" ]] && grep -E '^(PG_RPM_RELEASE|BUILD_DATE)=' "${SRV_DIR}/BUILD_INFO"
 
 # ------------------------------------------------------------- Bibliotheken
 
@@ -306,7 +282,7 @@ fi
 # pg_hba.conf/pg_ident.conf von initdb entfernen, gelesen wird etc/.
 INCLUDE_LINE="include '${ETC_DIR}/postgresql.conf'"
 if ! grep -qxF "$INCLUDE_LINE" "${DATA_DIR}/postgresql.conf"; then
-    printf '\n# install-postgres.sh: eigene Einstellungen\n%s\n' "$INCLUDE_LINE" \
+    printf '\n# install.sh: eigene Einstellungen\n%s\n' "$INCLUDE_LINE" \
         >> "${DATA_DIR}/postgresql.conf"
     echo "Include ergänzt: ${DATA_DIR}/postgresql.conf"
 fi

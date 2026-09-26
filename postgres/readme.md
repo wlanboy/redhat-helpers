@@ -1,28 +1,55 @@
 # postgres – PostgreSQL als non-root betreiben (RHEL 9, offline)
 
-PostgreSQL wird nicht gebaut und nicht per dnf installiert. Genutzt werden
-die fertigen RPMs aus dem offiziellen PostgreSQL-Yum-Repo (PGDG).
-`install-postgres.sh` prüft ihre Signatur, entpackt sie mit `rpm2archive`
-ins Home-Verzeichnis und betreibt den Server als systemd User Unit.
+PostgreSQL wird nicht compiliert und nicht per dnf installiert. Genutzt
+werden die fertigen RPMs aus dem offiziellen PostgreSQL-Yum-Repo (PGDG).
+Die Build-VM prüft einmal pro Version deren Signatur, entpackt sie mit
+`rpm2archive` und legt das Ergebnis als Tarball in Nexus ab. Die
+Runtime-VMs laden nur diesen Tarball, entpacken ihn ins Home-Verzeichnis
+und betreiben den Server als systemd User Unit.
+
+```
+                 Nexus
+   ┌──────────────────────────────────┐
+   │ pgdg-yum        (proxy)          │◄── PGDG-RPMs + GPG-Key
+   │ postgres-builds (raw hosted)     │◄── postgresql-<ver>-el9-<arch>.tar.gz
+   └──────────────────────────────────┘
+          ▲ upload          │ download
+   ┌──────┴─────┐    ┌──────▼──────┐ ┌─────────────┐
+   │  Build-VM  │    │ Runtime-VM1 │ │ Runtime-VM2 │
+   └────────────┘    └─────────────┘ └─────────────┘
+```
 
 Das geht, weil PostgreSQL `share/` und `lib/` relativ zum eigenen Binary
 sucht. Das RPM-Verzeichnis `/usr/pgsql-18` lässt sich deshalb beliebig
 verschieben. Nur `libpq` hat keinen RPATH und kommt per `LD_LIBRARY_PATH`
 aus dem eigenen `lib/` (steht in `etc/postgres.env`).
 
+Der Tarball ist an RHEL 9 und die CPU-Architektur gebunden. Build- und
+Runtime-VMs müssen beide RHEL 9 mit gleicher Architektur sein.
+
 ## Dateien
 
 - **versions.conf** – Version (Default: 18.6), RPM-Release-Tag,
-  Signaturprüfung an/aus, Nexus-URL und Repo-Name. Jeder Wert lässt sich
+  Signaturprüfung an/aus, Nexus-URL und Repo-Namen. Jeder Wert lässt sich
   per Umgebungsvariable überschreiben.
-- **install-postgres.sh** – als User, Runtime-VM. Download aus Nexus,
-  Signaturprüfung, Entpacken, initdb, Konfiguration, systemd User Unit.
+- **build.sh** – als User, Build-VM. Download der RPMs, Signaturprüfung,
+  Entpacken, Tarball mit `BUILD_INFO` und `.sha256`, optional Upload nach
+  Nexus.
+- **install.sh** – als User, Runtime-VM. Download des Tarballs,
+  SHA256-Prüfung, Entpacken, `ldd`-Check, initdb, Konfiguration, systemd
+  User Unit.
 
 ## Nexus
 
-Ein Proxy `pgdg-yum` (Typ yum oder raw) mit Remote-URL
-`https://download.postgresql.org/pub/repos/yum/` (abweichender Name:
-`NEXUS_PGDG_REPO` in `versions.conf`). Benötigte Pfade:
+| Repository        | Typ          | Upstream                                        | Genutzt von |
+|-------------------|--------------|-------------------------------------------------|-------------|
+| `pgdg-yum`        | yum oder raw (proxy) | `https://download.postgresql.org/pub/repos/yum/` | Build-VM |
+| `postgres-builds` | raw (hosted) | –                                               | Build-VM schreibt, Runtime-VMs lesen |
+
+Abweichende Namen: `NEXUS_PGDG_REPO` bzw. `NEXUS_BUILDS_REPO` in
+`versions.conf`.
+
+Benötigte Pfade im Proxy `pgdg-yum`:
 
 ```
 keys/PGDG-RPM-GPG-KEY-RHEL
@@ -41,9 +68,39 @@ Outbound von Nexus zu `download.postgresql.org` per HTTPS freischalten.
 Ist ein Proxy nicht erlaubt: Raw-Hosted-Repo mit demselben Namen und die
 Dateien unter denselben Pfaden hochladen.
 
-Zugangsdaten liest `curl` aus `~/.netrc`, falls vorhanden.
+`build.sh` lädt nach `postgres-builds` hoch:
 
-## Voraussetzungen (einmalig als root)
+```
+postgresql/18.6/postgresql-18.6-el9-x86_64.tar.gz
+postgresql/18.6/postgresql-18.6-el9-x86_64.tar.gz.sha256
+```
+
+Der Build-User braucht dafür Schreibrechte (`nx-repository-view-raw-postgres-builds-add`
+und `-edit`), die Runtime-VMs nur Leserechte. Zugangsdaten liest `curl` aus
+`~/.netrc`, falls vorhanden. Für den Upload alternativ `NEXUS_USER=<user>`
+setzen, dann fragt `curl` nach dem Passwort.
+
+## Build-VM
+
+Braucht `curl`, `tar`, `gzip` und `rpm` (für `rpm2archive` und `rpmkeys`),
+alles Standard auf RHEL 9. Kein root, keine Compiler.
+
+```bash
+postgres/build.sh                  # Upload am Ende bestätigen
+UPLOAD=j postgres/build.sh         # ohne Rückfrage hochladen
+```
+
+Arbeitsverzeichnis ist `~/build/postgres` (änderbar per `WORK_DIR`), der
+Tarball liegt danach in `dist/`. Ohne Nexus-Upload lässt er sich auch per
+`scp` auf die Runtime-VM kopieren und dort nach `~/postgres/downloads/`
+legen, `install.sh` nimmt dann die vorhandene Datei.
+
+`BUILD_INFO` im Tarball enthält RPM-Release, Build-Datum und die SHA256 der
+Quell-RPMs.
+
+## Runtime-VM
+
+### Voraussetzungen (einmalig als root)
 
 ```bash
 dnf install -y libicu numactl-libs liburing
@@ -53,14 +110,14 @@ firewall-cmd --permanent --add-port=5432/tcp && firewall-cmd --reload
 
 `libicu` und `numactl-libs` kommen aus BaseOS, `liburing` aus AppStream.
 Alles andere (OpenSSL, lz4, zstd, libxml2, systemd-libs, ...) ist auf RHEL 9
-Standard. Fehlt eine Bibliothek, bricht das Skript nach dem `ldd`-Check mit
+Standard. Fehlt eine Bibliothek, bricht `install.sh` nach dem `ldd`-Check mit
 der Liste ab. Das contrib-Modul `xml2` braucht zusätzlich `libxslt`.
 
-## Installation
+### Installation
 
 ```bash
-postgres/install-postgres.sh                            # als User "postgres"
-PG_PASSWORD=... ENABLE=j postgres/install-postgres.sh   # ohne Rückfragen
+postgres/install.sh                            # als User "postgres"
+PG_PASSWORD=... ENABLE=j postgres/install.sh   # ohne Rückfragen
 ```
 
 `systemctl --user` braucht eine echte Login-Session (SSH direkt als User
@@ -105,16 +162,17 @@ und dem User übergeben).
 
 ## Minor-Upgrade (z.B. 18.6 → 18.7)
 
-Neue Version und Release-Tag in `versions.conf` eintragen und
-`install-postgres.sh` erneut ausführen. Die neue Version wird neben die
-alte entpackt, `current` umgebogen und der Dienst neu gestartet. `data/`
+Neue Version und Release-Tag in `versions.conf` eintragen, auf der
+Build-VM `build.sh` ausführen, dann auf jeder Runtime-VM `install.sh`. Die
+neue Version wird neben die alte entpackt, `current` umgebogen und der Dienst neu gestartet. `data/`
 und `etc/` bleiben erhalten. Rollback: `current` zurücksetzen und
 `systemctl --user restart postgres`.
 
 ## Major-Upgrade (z.B. 18 → 19)
 
-Das Skript erkennt einen Cluster einer anderen Major-Version, entpackt die
-neue Version und bricht dann ab. Das Upgrade selbst läuft mit
+Tarball wie beim Minor-Upgrade mit `build.sh` erzeugen. `install.sh`
+erkennt einen Cluster einer anderen Major-Version, entpackt die neue
+Version und bricht dann ab. Das Upgrade selbst läuft mit
 `pg_upgrade` von Hand. Im Beispiel 17.11 → 18.6 (in einer frischen Shell,
 ohne `postgres.env`):
 
@@ -136,7 +194,7 @@ $NEW/bin/pg_upgrade -U postgres -b $OLD/bin -B $NEW/bin \
     -d ~/postgres/data/17 -D ~/postgres/data/18
 ```
 
-Danach `install-postgres.sh` erneut ausführen. Es findet den Cluster in
+Danach `install.sh` erneut ausführen. Es findet den Cluster in
 `data/18`, bindet `etc/postgresql.conf` ein, entfernt die `pg_hba.conf`
 von initdb, schreibt die Unit auf `data/18` um und startet den Dienst.
 Anschließend:
