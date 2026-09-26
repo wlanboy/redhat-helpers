@@ -54,6 +54,13 @@ entpacken ihn als User (ohne dnf) und betreiben ihn als systemd User Unit,
 inklusive Anleitung für Minor- und Major-Upgrades. Siehe
 [postgres/readme.md](postgres/readme.md).
 
+### tekton/
+
+Tekton-Pipelines auf UBI 9, die `postgres/build.sh` und
+`rabbitmq/build-erlang.sh` ausführen und die Tarballs nach Nexus
+hochladen (Ersatz für die Build-VM). Siehe
+[tekton/readme.md](tekton/readme.md).
+
 ### valkeycluster/
 
 Valkey im Cluster-Modus mit mehreren Instanzen pro VM
