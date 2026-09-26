@@ -46,6 +46,13 @@ Valkey (fertiger jammy-Build von download.valkey.io) über einen Nexus
 Raw-Proxy laden und als systemd User Unit betreiben. Siehe
 [valkey/readme.md](valkey/readme.md).
 
+### postgres/
+
+PostgreSQL aus den fertigen PGDG-RPMs für RHEL 9 (über einen Nexus-Proxy)
+als User entpacken, ohne Installation per dnf, und als systemd User Unit
+betreiben, inklusive Anleitung für Minor- und Major-Upgrades. Siehe
+[postgres/readme.md](postgres/readme.md).
+
 ### valkeycluster/
 
 Valkey im Cluster-Modus mit mehreren Instanzen pro VM
