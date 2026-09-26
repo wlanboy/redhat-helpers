@@ -51,7 +51,7 @@ Ein Raw-Proxy mit Remote-URL `https://github.com/`. Die Pfade im Proxy
 entsprechen den GitHub-Pfaden, z.B.
 
 ```
-https://nexus.example.com/repository/github-releases/erlang/otp/releases/download/OTP-27.3.4.18/otp_src_27.3.4.18.tar.gz
+http://maven.big.lan/repository/github-releases/erlang/otp/releases/download/OTP-27.3.4.18/otp_src_27.3.4.18.tar.gz
 ```
 
 Anforderungen an den Proxy:
@@ -112,7 +112,7 @@ löschen.
 Zugangsdaten für den Upload liest `curl` aus `~/.netrc` des Build-Users:
 
 ```
-machine nexus.example.com login <user> password <token>
+machine maven.big.lan login <user> password <token>
 ```
 
 (`chmod 600 ~/.netrc`), alternativ fragt `build-erlang.sh` per `NEXUS_USER`
