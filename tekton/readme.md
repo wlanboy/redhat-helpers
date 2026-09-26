@@ -27,6 +27,8 @@ clone (git-clone-ubi9) ──► build (postgres-build-ubi9 | erlang-build-ubi9)
   `.sha256` per `curl --upload-file` hoch.
 - **pipelines/** – die beiden Pipelines.
 - **runs/** – Beispiel-PipelineRuns.
+- **clean.sh** – löscht die PipelineRuns beider Pipelines samt TaskRuns
+  und Workspace-PVCs, fragt vorher mit Kontext und Namespace nach.
 
 Beide Build-Skripte verweigern root. Der Build-Step läuft deshalb als root
 (Pakete installieren, `HOME` und `.netrc` vorbereiten) und startet das
@@ -120,6 +122,11 @@ kubectl create -n tekton -f tekton/runs/postgres-build-publish-run.yaml
 kubectl create -n tekton -f tekton/runs/erlang-build-publish-run.yaml
 
 tkn pipelinerun logs -n tekton -f --last
+
+# Runs aufräumen (alle, oder nur postgres bzw. erlang)
+tekton/clean.sh
+tekton/clean.sh erlang
+DELETE=j KUBE_CONTEXT=kind-local tekton/clean.sh   # ohne Rückfrage
 ```
 
 Der Erlang-Build braucht je nach CPU 10–30 Minuten (Request: 2 CPU, 2 GiB,
