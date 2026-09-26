@@ -1,0 +1,38 @@
+# erlang-build-publish-run.yaml
+#
+# Start: kubectl create -n tekton -f tekton/runs/erlang-build-publish-run.yaml
+# (create statt apply wegen generateName)
+apiVersion: tekton.dev/v1
+kind: PipelineRun
+metadata:
+  generateName: erlang-build-publish-
+spec:
+  pipelineRef:
+    name: erlang-build-publish-ubi9
+  params:
+    - name: nexus-url
+      value: http://nexus.nexus.svc.cluster.local:8081
+    # - name: otp-version
+    #   value: 27.3.4.18
+    # - name: otp-sha256
+    #   value: <sha256 von otp_src_27.3.4.18.tar.gz>
+    # - name: publish
+    #   value: "false"
+  timeouts:
+    pipeline: 1h30m
+  workspaces:
+    - name: source
+      volumeClaimTemplate:
+        spec:
+          accessModes: [ReadWriteOnce]
+          resources:
+            requests:
+              storage: 5Gi
+    - name: nexus-credentials
+      secret:
+        secretName: nexus-publish
+    # Nur nötig, wenn der Cluster die UBI-Repos nicht erreicht (git-core,
+    # gcc, openssl-devel, ...). ConfigMap siehe tekton/readme.md.
+    # - name: dnf-repos
+    #   configMap:
+    #     name: rhel9-dnf-repos

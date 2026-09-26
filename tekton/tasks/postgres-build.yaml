@@ -1,0 +1,87 @@
+# postgres-build.yaml
+#
+# Führt postgres/build.sh aus dem Workspace "source" auf UBI 9 aus und
+# liefert Tarball-Name und Upload-Ziel als Results für nexus-upload-ubi9.
+# Der Upload im Skript selbst ist abgeschaltet (UPLOAD=n).
+#
+# build.sh verweigert root. Der Step bereitet als root vor (HOME, .netrc,
+# hostname-Ersatz) und startet das Skript dann per setpriv als UID 1001.
+#
+# Leere Parameter = Default aus postgres/versions.conf.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: postgres-build-ubi9
+spec:
+  params:
+    - name: pg-version
+      type: string
+      default: ""
+    - name: pg-rpm-release
+      type: string
+      default: ""
+    - name: nexus-url
+      type: string
+      default: ""
+    - name: image
+      type: string
+      default: registry.access.redhat.com/ubi9/ubi:latest
+  workspaces:
+    - name: source
+    - name: nexus-credentials
+      optional: true
+      readOnly: true
+  results:
+    - name: artifact
+      description: Dateiname des Tarballs
+    - name: artifact-dir
+      description: Verzeichnis des Tarballs relativ zum Workspace "source"
+    - name: upload-base
+      description: Ziel-URL im Nexus Raw-Hosted-Repo
+  steps:
+    - name: build
+      image: $(params.image)
+      env:
+        - name: PG_VERSION
+          value: $(params.pg-version)
+        - name: PG_RPM_RELEASE
+          value: $(params.pg-rpm-release)
+        - name: NEXUS_URL
+          value: $(params.nexus-url)
+        - name: SRC
+          value: $(workspaces.source.path)
+        - name: NETRC_BOUND
+          value: $(workspaces.nexus-credentials.bound)
+        - name: NETRC_FILE
+          value: $(workspaces.nexus-credentials.path)/.netrc
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        BUILD_UID=1001
+        ARTIFACT_DIR=.build/postgres/dist
+        export HOME=/tmp/build-home
+        export WORK_DIR="${SRC}/.build/postgres"
+        export UPLOAD=n
+
+        mkdir -p "$HOME" "$WORK_DIR"
+        if [[ "$NETRC_BOUND" == "true" ]]; then
+            install -m 600 "$NETRC_FILE" "$HOME/.netrc"
+        fi
+        chown -R "$BUILD_UID:0" "$HOME" "$WORK_DIR"
+
+        # build.sh schreibt "hostname -s" nach BUILD_INFO, UBI 9 hat kein hostname
+        if ! command -v hostname &>/dev/null; then
+            printf '#!/bin/sh\ncat /proc/sys/kernel/hostname\n' > /usr/local/bin/hostname
+            chmod 755 /usr/local/bin/hostname
+        fi
+
+        setpriv --reuid="$BUILD_UID" --regid=0 --clear-groups \
+            bash "${SRC}/postgres/build.sh"
+
+        (
+            . "${SRC}/postgres/versions.conf"
+            printf '%s' "$PG_TARBALL" > "$(results.artifact.path)"
+            printf '%s' "$ARTIFACT_DIR" > "$(results.artifact-dir.path)"
+            printf '%s' "${NEXUS_BUILDS}/postgresql/${PG_VERSION}" > "$(results.upload-base.path)"
+        )

@@ -1,0 +1,54 @@
+# nexus-upload.yaml
+#
+# Lädt einen Tarball und seine .sha256-Datei in ein Nexus Raw-Hosted-Repo
+# hoch. Vorher wird der SHA256 geprüft.
+#
+# Zugangsdaten: Workspace "nexus-credentials" mit einer Datei ".netrc"
+# (Secret, siehe tekton/readme.md).
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: nexus-upload-ubi9
+spec:
+  params:
+    - name: upload-base
+      type: string
+      description: Ziel-URL ohne abschließenden Slash, z.B. https://nexus/repository/postgres-builds/postgresql/18.6
+    - name: artifact-dir
+      type: string
+      description: Verzeichnis relativ zum Workspace "source"
+    - name: artifact
+      type: string
+      description: Dateiname des Tarballs, <artifact>.sha256 muss daneben liegen
+    - name: image
+      type: string
+      default: registry.access.redhat.com/ubi9/ubi:latest
+  workspaces:
+    - name: source
+      readOnly: true
+    - name: nexus-credentials
+      readOnly: true
+  steps:
+    - name: upload
+      image: $(params.image)
+      env:
+        - name: UPLOAD_BASE
+          value: $(params.upload-base)
+        - name: ARTIFACT_DIR
+          value: $(workspaces.source.path)/$(params.artifact-dir)
+        - name: ARTIFACT
+          value: $(params.artifact)
+        - name: NETRC_FILE
+          value: $(workspaces.nexus-credentials.path)/.netrc
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        cd "$ARTIFACT_DIR"
+        sha256sum -c "${ARTIFACT}.sha256"
+
+        for f in "$ARTIFACT" "${ARTIFACT}.sha256"; do
+            echo "-> ${UPLOAD_BASE}/${f}"
+            curl -fsS --netrc-file "$NETRC_FILE" --upload-file "$f" "${UPLOAD_BASE}/${f}"
+        done
+        echo "Upload fertig."

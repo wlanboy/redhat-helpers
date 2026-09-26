@@ -1,0 +1,68 @@
+# git-clone.yaml
+#
+# Klont ein Git-Repository in den Workspace "output" (flach, nur der
+# angegebene Branch/Tag/Commit). Läuft auf UBI 9, git-core wird bei Bedarf
+# per dnf nachinstalliert.
+#
+# Optionaler Workspace "dnf-repos": ConfigMap mit *.repo-Dateien (z.B. die
+# Nexus-Proxies auf RHEL 9 BaseOS/AppStream). Ist er gebunden, ersetzen die
+# Dateien die UBI-Repos im Container.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: git-clone-ubi9
+spec:
+  params:
+    - name: url
+      type: string
+    - name: revision
+      type: string
+      default: main
+    - name: image
+      type: string
+      default: registry.access.redhat.com/ubi9/ubi:latest
+  workspaces:
+    - name: output
+    - name: dnf-repos
+      optional: true
+      readOnly: true
+  results:
+    - name: commit
+      description: SHA des ausgecheckten Commits
+  steps:
+    - name: clone
+      image: $(params.image)
+      env:
+        - name: GIT_URL
+          value: $(params.url)
+        - name: GIT_REVISION
+          value: $(params.revision)
+        - name: DNF_REPOS_BOUND
+          value: $(workspaces.dnf-repos.bound)
+        - name: DNF_REPOS_DIR
+          value: $(workspaces.dnf-repos.path)
+        - name: DEST
+          value: $(workspaces.output.path)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        if ! command -v git &>/dev/null; then
+            if [[ "$DNF_REPOS_BOUND" == "true" ]]; then
+                rm -f /etc/yum.repos.d/*.repo
+                cp "$DNF_REPOS_DIR"/*.repo /etc/yum.repos.d/
+            fi
+            dnf install -y -q git-core
+        fi
+
+        # Workspace leeren, damit keine Reste eines früheren Laufs übrig bleiben
+        find "$DEST" -mindepth 1 -delete
+        # Das Volume gehört evtl. einer anderen UID ("dubious ownership")
+        git config --global --add safe.directory "$DEST"
+        cd "$DEST"
+        git init -q
+        git remote add origin "$GIT_URL"
+        git fetch -q --depth 1 origin "$GIT_REVISION"
+        git checkout -q FETCH_HEAD
+        git log -1 --format='%H %s'
+        printf '%s' "$(git rev-parse HEAD)" > "$(results.commit.path)"

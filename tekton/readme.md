@@ -63,13 +63,21 @@ der ServiceAccount der Pipeline deshalb eine SCC wie `anyuid`.
 ### Nexus-Zugangsdaten
 
 Secret mit einer `.netrc`, genutzt beim Download (falls die Proxies
-Anmeldung verlangen) und beim Upload (Schreibrechte auf das Raw-Hosted-Repo):
+Anmeldung verlangen) und beim Upload (Schreibrechte auf das Raw-Hosted-Repo).
+Die Run-Dateien erwarten das Secret `nexus-publish` im Namespace `tekton`
+und Nexus unter `http://nexus.nexus.svc.cluster.local:8081`. Beides legt
+`raspberrypi/tools/nexus.py` an, zusammen mit den Repos `pgdg-yum`,
+`github-releases`, `postgres-builds`, `rabbitmq-builds` und den Rechten für
+den User `tekton`.
+
+Für einen anderen Nexus das Secret von Hand anlegen und `secretName` sowie
+`nexus-url` in den Run-Dateien anpassen:
 
 ```bash
 cat > netrc <<'EOF'
 machine nexus.example.com login <user> password <passwort>
 EOF
-kubectl create secret generic nexus-netrc --from-file=.netrc=netrc
+kubectl create secret generic nexus-netrc -n tekton --from-file=.netrc=netrc
 rm netrc
 ```
 
@@ -106,13 +114,12 @@ die Nexus-Proxies aus `versions.conf`.
 ## Installation und Start
 
 ```bash
-kubectl apply -f tekton/tasks/ -f tekton/pipelines/
+kubectl apply -n tekton -f tekton/tasks/ -f tekton/pipelines/
 
-# nexus-url in den Run-Dateien anpassen, dann:
-kubectl create -f tekton/runs/postgres-build-publish-run.yaml
-kubectl create -f tekton/runs/erlang-build-publish-run.yaml
+kubectl create -n tekton -f tekton/runs/postgres-build-publish-run.yaml
+kubectl create -n tekton -f tekton/runs/erlang-build-publish-run.yaml
 
-tkn pipelinerun logs -f --last
+tkn pipelinerun logs -n tekton -f --last
 ```
 
 Der Erlang-Build braucht je nach CPU 10–30 Minuten (Request: 2 CPU, 2 GiB,
@@ -124,4 +131,5 @@ Erlang-Tarball läuft daher auf den Runtime-VMs.
 
 Nexus lehnt einen zweiten Upload derselben Version ab, wenn im
 Raw-Hosted-Repo "Disable redeploy" gesetzt ist. Dann die Version erhöhen
-oder mit `publish=false` nur bauen.
+oder mit `publish=false` nur bauen. Die Repos aus `nexus.py` haben die
+Write-Policy `ALLOW`, dort überschreibt ein neuer Lauf den Tarball.

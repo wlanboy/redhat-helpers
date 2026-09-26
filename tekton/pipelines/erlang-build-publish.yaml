@@ -1,0 +1,92 @@
+# erlang-build-publish.yaml
+#
+# clone -> rabbitmq/build-erlang.sh (UBI 9) -> Upload des Tarballs nach Nexus.
+# Leere Versions-Parameter = Default aus rabbitmq/versions.conf.
+apiVersion: tekton.dev/v1
+kind: Pipeline
+metadata:
+  name: erlang-build-publish-ubi9
+spec:
+  params:
+    - name: git-url
+      type: string
+      default: https://github.com/wlanboy/redhat-helpers
+    - name: git-revision
+      type: string
+      default: main
+    - name: otp-version
+      type: string
+      default: ""
+    - name: otp-sha256
+      type: string
+      default: ""
+    - name: nexus-url
+      type: string
+      default: ""
+    - name: publish
+      type: string
+      default: "true"
+      description: '"false" = nur bauen, nicht hochladen'
+  workspaces:
+    - name: source
+    - name: nexus-credentials
+    - name: dnf-repos
+      optional: true
+  results:
+    - name: artifact
+      value: $(tasks.build.results.artifact)
+    - name: upload-base
+      value: $(tasks.build.results.upload-base)
+  tasks:
+    - name: clone
+      taskRef:
+        name: git-clone-ubi9
+      params:
+        - name: url
+          value: $(params.git-url)
+        - name: revision
+          value: $(params.git-revision)
+      workspaces:
+        - name: output
+          workspace: source
+        - name: dnf-repos
+          workspace: dnf-repos
+
+    - name: build
+      runAfter: [clone]
+      taskRef:
+        name: erlang-build-ubi9
+      params:
+        - name: otp-version
+          value: $(params.otp-version)
+        - name: otp-sha256
+          value: $(params.otp-sha256)
+        - name: nexus-url
+          value: $(params.nexus-url)
+      workspaces:
+        - name: source
+          workspace: source
+        - name: nexus-credentials
+          workspace: nexus-credentials
+        - name: dnf-repos
+          workspace: dnf-repos
+
+    - name: publish
+      when:
+        - input: $(params.publish)
+          operator: in
+          values: ["true"]
+      taskRef:
+        name: nexus-upload-ubi9
+      params:
+        - name: upload-base
+          value: $(tasks.build.results.upload-base)
+        - name: artifact-dir
+          value: $(tasks.build.results.artifact-dir)
+        - name: artifact
+          value: $(tasks.build.results.artifact)
+      workspaces:
+        - name: source
+          workspace: source
+        - name: nexus-credentials
+          workspace: nexus-credentials

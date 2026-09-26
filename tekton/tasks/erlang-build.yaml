@@ -1,0 +1,105 @@
+# erlang-build.yaml
+#
+# Baut Erlang/OTP mit rabbitmq/build-erlang.sh aus dem Workspace "source"
+# auf UBI 9 und liefert Tarball-Name und Upload-Ziel als Results für
+# nexus-upload-ubi9. Der Upload im Skript selbst ist abgeschaltet (UPLOAD=n).
+#
+# Ablauf in einem Step (Pakete aus einem Step sind im nächsten nicht mehr da):
+#   1. als root: rabbitmq/install-build-deps.sh (dnf install gcc, openssl-devel, ...)
+#   2. per setpriv als UID 1001: rabbitmq/build-erlang.sh (verweigert root)
+#
+# Optionaler Workspace "dnf-repos": ConfigMap mit *.repo-Dateien (z.B. die
+# Nexus-Proxies auf RHEL 9 BaseOS/AppStream). Ist er gebunden, ersetzen die
+# Dateien die UBI-Repos im Container.
+#
+# Leere Parameter = Default aus rabbitmq/versions.conf.
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: erlang-build-ubi9
+spec:
+  params:
+    - name: otp-version
+      type: string
+      default: ""
+    - name: otp-sha256
+      type: string
+      default: ""
+    - name: nexus-url
+      type: string
+      default: ""
+    - name: image
+      type: string
+      default: registry.access.redhat.com/ubi9/ubi:latest
+  workspaces:
+    - name: source
+    - name: nexus-credentials
+      optional: true
+      readOnly: true
+    - name: dnf-repos
+      optional: true
+      readOnly: true
+  results:
+    - name: artifact
+      description: Dateiname des Tarballs
+    - name: artifact-dir
+      description: Verzeichnis des Tarballs relativ zum Workspace "source"
+    - name: upload-base
+      description: Ziel-URL im Nexus Raw-Hosted-Repo
+  steps:
+    - name: build
+      image: $(params.image)
+      computeResources:
+        requests:
+          cpu: "2"
+          memory: 2Gi
+        limits:
+          memory: 6Gi
+      env:
+        - name: OTP_VERSION
+          value: $(params.otp-version)
+        - name: OTP_SHA256
+          value: $(params.otp-sha256)
+        - name: NEXUS_URL
+          value: $(params.nexus-url)
+        - name: SRC
+          value: $(workspaces.source.path)
+        - name: NETRC_BOUND
+          value: $(workspaces.nexus-credentials.bound)
+        - name: NETRC_FILE
+          value: $(workspaces.nexus-credentials.path)/.netrc
+        - name: DNF_REPOS_BOUND
+          value: $(workspaces.dnf-repos.bound)
+        - name: DNF_REPOS_DIR
+          value: $(workspaces.dnf-repos.path)
+      script: |
+        #!/usr/bin/env bash
+        set -euo pipefail
+
+        BUILD_UID=1001
+        ARTIFACT_DIR=.build/erlang/dist
+        export HOME=/tmp/build-home
+        export WORK_DIR="${SRC}/.build/erlang"
+        export UPLOAD=n
+
+        if [[ "$DNF_REPOS_BOUND" == "true" ]]; then
+            rm -f /etc/yum.repos.d/*.repo
+            cp "$DNF_REPOS_DIR"/*.repo /etc/yum.repos.d/
+        fi
+        bash "${SRC}/rabbitmq/install-build-deps.sh"
+
+        mkdir -p "$HOME" "$WORK_DIR"
+        if [[ "$NETRC_BOUND" == "true" ]]; then
+            install -m 600 "$NETRC_FILE" "$HOME/.netrc"
+        fi
+        chown -R "$BUILD_UID:0" "$HOME" "$WORK_DIR"
+
+        setpriv --reuid="$BUILD_UID" --regid=0 --clear-groups \
+            bash "${SRC}/rabbitmq/build-erlang.sh"
+
+        (
+            . "${SRC}/rabbitmq/versions.conf"
+            printf '%s' "$ERLANG_TARBALL" > "$(results.artifact.path)"
+            printf '%s' "$ARTIFACT_DIR" > "$(results.artifact-dir.path)"
+            printf '%s' "${NEXUS_BUILDS}/erlang/${OTP_VERSION}" > "$(results.upload-base.path)"
+        )
