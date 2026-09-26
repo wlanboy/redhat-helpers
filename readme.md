@@ -40,6 +40,12 @@ systemd User Unit betreiben, alles offline über Nexus. Siehe
 [rabbitmq/readme.md](rabbitmq/readme.md) und die Nexus-Anforderungen in
 [rabbitmq/requirements.md](rabbitmq/requirements.md).
 
+### valkey/
+
+Valkey (fertiger jammy-Build von download.valkey.io) über einen Nexus
+Raw-Proxy laden und als systemd User Unit betreiben. Siehe
+[valkey/readme.md](valkey/readme.md).
+
 ### kind/
 
 - **install-kind.sh** – Richtet einen kind-Cluster (Kubernetes IN Docker)
