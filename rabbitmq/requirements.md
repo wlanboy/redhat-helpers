@@ -43,7 +43,7 @@ nichts ausliefert.
 **Runtime-VMs** brauchen nur Laufzeit-Bibliotheken, die auf RHEL 9 in der
 Regel schon installiert sind: `openssl-libs` (3.x), `ncurses-libs`,
 `libstdc++`, `glibc`, `zlib`, dazu `tar`, `xz`, `curl`.
-`prepare-runtime.sh` installiert fehlende Pakete nach.
+`prepare-runtime.sh` prüft, ob sie vorhanden sind.
 
 ## 2. GitHub Releases (raw proxy)
 

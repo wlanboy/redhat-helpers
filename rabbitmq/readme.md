@@ -47,8 +47,8 @@ Runtime-VMs müssen beide RHEL 9 mit gleicher Architektur sein.
 - **build-erlang.sh** – User, Build-VM. Lädt den OTP-Quellcode, baut ohne
   Java/wx/ODBC, bricht ab wenn OpenSSL fehlt, testet `crypto`/`ssl`, packt
   den Tarball und lädt ihn optional nach Nexus hoch.
-- **prepare-runtime.sh** – root, Runtime-VM. Laufzeit-Bibliotheken,
-  `loginctl enable-linger`, firewalld-Ports.
+- **prepare-runtime.sh** – User, Runtime-VM. Prüft Laufzeit-Bibliotheken,
+  Lingering, `systemctl --user` und Hostname. Gibt fehlende root-Schritte aus.
 - **install-rabbitmq.sh** – User, Runtime-VM. Installation, Konfiguration,
   Erlang-Cookie, systemd User Unit.
 
@@ -68,7 +68,7 @@ nächsten Build geprüft.
 ### Runtime-VMs (je VM)
 
 ```bash
-sudo rabbitmq/prepare-runtime.sh rabbitmq    # einmalig, User "rabbitmq"
+rabbitmq/prepare-runtime.sh                  # als User "rabbitmq", nur Prüfung
 rabbitmq/install-rabbitmq.sh                 # als User "rabbitmq"
 ```
 
@@ -115,7 +115,7 @@ Voraussetzungen auf allen Nodes:
 2. Kurznamen der Nodes auflösbar (DNS oder `/etc/hosts`), der Node-Name ist
    `rabbit@<hostname -s>`.
 3. Ports 4369, 25672 und 35672–35682 zwischen den Nodes offen
-   (`prepare-runtime.sh`).
+   (firewalld, als root).
 
 Beitritt manuell auf Node 2 und 3:
 
