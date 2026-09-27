@@ -9,6 +9,8 @@
 #   - Lingering für den aktuellen User (User Units laufen ohne Login
 #     und starten beim Boot)
 #   - systemctl --user erreichbar (echte Login-Session)
+#   - $RABBITMQ_BASE (Default: /opt/local/rabbitmq) vorhanden und
+#     beschreibbar
 #   - Kurzname des Hosts auflösbar (für Cluster)
 #
 # Fehlt etwas, gibt das Skript die root-Befehle für den Admin aus und
@@ -62,6 +64,15 @@ if systemctl --user show-environment &>/dev/null; then
     ok "systemctl --user erreichbar"
 else
     fail "systemctl --user nicht erreichbar (per SSH direkt als '$USER' einloggen, nicht su/sudo -u)"
+fi
+
+echo "== Verzeichnis =="
+BASE=${RABBITMQ_BASE:-/opt/local/rabbitmq}
+if [[ -d "$BASE" && -w "$BASE" ]]; then
+    ok "$BASE beschreibbar"
+else
+    fail "$BASE fehlt oder ist nicht beschreibbar"
+    ROOT_CMDS+=("mkdir -p $BASE && chown $USER: $BASE")
 fi
 
 echo "== Hostname =="

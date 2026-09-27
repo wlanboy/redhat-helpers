@@ -20,7 +20,8 @@
 #   - schreibt ~/.config/systemd/user/rabbitmq.service und bietet
 #     daemon-reload + enable --now an (ohne Nachfrage: ENABLE=j bzw. ENABLE=n)
 #
-# Verzeichnis: $RABBITMQ_BASE (Default: ~/rabbitmq)
+# Verzeichnis: $RABBITMQ_BASE (Default: /opt/local/rabbitmq). Muss vorher
+#              als root angelegt werden und dem User gehören.
 # Vorher prüfen: prepare-runtime.sh (als User, gibt fehlende root-Schritte aus)
 #
 # Läuft im User-Kontext (kein root).
@@ -47,7 +48,12 @@ if [[ "$(loginctl show-user "$USER" -p Linger --value 2>/dev/null || echo no)" !
     echo "         Logout und startet nicht beim Boot. Als root: loginctl enable-linger $USER" >&2
 fi
 
-BASE=${RABBITMQ_BASE:-$HOME/rabbitmq}
+BASE=${RABBITMQ_BASE:-/opt/local/rabbitmq}
+if [[ ! -d "$BASE" || ! -w "$BASE" ]]; then
+    echo "Fehler: $BASE fehlt oder ist nicht beschreibbar. Als root:" >&2
+    echo "  mkdir -p $BASE && chown $USER: $BASE" >&2
+    exit 1
+fi
 DL_DIR="${BASE}/downloads"
 ERL_DIR="${BASE}/erlang/erlang-${OTP_VERSION}"
 RMQ_DIR="${BASE}/server/rabbitmq_server-${RABBITMQ_VERSION}"

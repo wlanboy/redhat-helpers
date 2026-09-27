@@ -48,7 +48,7 @@ Runtime-VMs müssen beide RHEL 9 mit gleicher Architektur sein.
   Java/wx/ODBC, bricht ab wenn OpenSSL fehlt, testet `crypto`/`ssl`, packt
   den Tarball und lädt ihn optional nach Nexus hoch.
 - **prepare-runtime.sh** – User, Runtime-VM. Prüft Laufzeit-Bibliotheken,
-  Lingering, `systemctl --user` und Hostname. Gibt fehlende root-Schritte aus.
+  Lingering, `systemctl --user`, `/opt/local/rabbitmq` und Hostname. Gibt fehlende root-Schritte aus.
 - **install-rabbitmq.sh** – User, Runtime-VM. Installation, Konfiguration,
   Erlang-Cookie, systemd User Unit.
 
@@ -76,10 +76,10 @@ Wichtig: `systemctl --user` braucht eine echte Login-Session des Users (SSH
 direkt als dieser User oder `machinectl shell rabbitmq@`). Mit `su -` oder
 `sudo -u` fehlt `XDG_RUNTIME_DIR` und `systemctl --user` schlägt fehl.
 
-Verzeichnisse unter `~/rabbitmq` (änderbar per `RABBITMQ_BASE`):
+Verzeichnisse unter `/opt/local/rabbitmq` (änderbar per `RABBITMQ_BASE`):
 
 ```
-~/rabbitmq/
+/opt/local/rabbitmq/
 ├── erlang/erlang-27.3.4.18/       + current -> erlang-27.3.4.18
 ├── server/rabbitmq_server-4.3.6/  + current -> rabbitmq_server-4.3.6
 ├── etc/rabbitmq.conf              einmalig angelegt, danach eigene Pflege
@@ -90,15 +90,14 @@ Verzeichnisse unter `~/rabbitmq` (änderbar per `RABBITMQ_BASE`):
 └── downloads/
 ```
 
-Ist `/home` mit `noexec` gemountet, `RABBITMQ_BASE` auf ein ausführbares
-Dateisystem legen (z.B. `/opt/local/rabbitmq`, einmalig von root anlegen
-und dem User übergeben).
+`/opt/local/rabbitmq` legt root einmalig an und übergibt es dem User
+(`prepare-runtime.sh` gibt den Befehl aus).
 
 Der Default-User `guest` darf sich nur von localhost anmelden. Für den
 Zugriff von außen einen eigenen Admin anlegen:
 
 ```bash
-set -a; . ~/rabbitmq/etc/rabbitmq.env; set +a
+set -a; . /opt/local/rabbitmq/etc/rabbitmq.env; set +a
 rabbitmqctl add_user admin '<passwort>'
 rabbitmqctl set_user_tags admin administrator
 rabbitmqctl set_permissions -p / admin '.*' '.*' '.*'
@@ -120,7 +119,7 @@ Voraussetzungen auf allen Nodes:
 Beitritt manuell auf Node 2 und 3:
 
 ```bash
-set -a; . ~/rabbitmq/etc/rabbitmq.env; set +a
+set -a; . /opt/local/rabbitmq/etc/rabbitmq.env; set +a
 rabbitmqctl stop_app
 rabbitmqctl join_cluster rabbit@node1
 rabbitmqctl start_app
