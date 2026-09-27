@@ -92,7 +92,7 @@ UPLOAD=j postgres/build.sh         # ohne Rückfrage hochladen
 
 Arbeitsverzeichnis ist `~/build/postgres` (änderbar per `WORK_DIR`), der
 Tarball liegt danach in `dist/`. Ohne Nexus-Upload lässt er sich auch per
-`scp` auf die Runtime-VM kopieren und dort nach `~/postgres/downloads/`
+`scp` auf die Runtime-VM kopieren und dort nach `/opt/local/postgres/downloads/`
 legen, `install.sh` nimmt dann die vorhandene Datei.
 
 `BUILD_INFO` im Tarball enthält RPM-Release, Build-Datum und die SHA256 der
@@ -105,6 +105,7 @@ Quell-RPMs.
 ```bash
 dnf install -y libicu numactl-libs liburing
 loginctl enable-linger postgres
+mkdir -p /opt/local/postgres && chown postgres: /opt/local/postgres
 firewall-cmd --permanent --add-port=5432/tcp && firewall-cmd --reload
 ```
 
@@ -123,10 +124,10 @@ PG_PASSWORD=... ENABLE=j postgres/install.sh   # ohne Rückfragen
 `systemctl --user` braucht eine echte Login-Session (SSH direkt als User
 oder `machinectl shell postgres@`), nicht `su -` oder `sudo -u`.
 
-Verzeichnisse unter `~/postgres` (änderbar per `PG_BASE`):
+Verzeichnisse unter `/opt/local/postgres` (änderbar per `PG_BASE`):
 
 ```
-~/postgres/
+/opt/local/postgres/
 ├── server/postgresql-18.6/  + current -> postgresql-18.6
 ├── etc/postgresql.conf      einmalig angelegt, danach eigene Pflege
 ├── etc/pg_hba.conf          einmalig angelegt, scram-sha-256 für alle
@@ -151,14 +152,10 @@ bei glibc- und ICU-Updates stabil), Data-Checksums an. Der Superuser heißt
 eingetragen. `pg_stat_statements` ist vorgeladen.
 
 ```bash
-set -a; . ~/postgres/etc/postgres.env; set +a
+set -a; . /opt/local/postgres/etc/postgres.env; set +a
 psql -c 'select version()'
 systemctl --user reload postgres     # nach Änderungen an pg_hba.conf
 ```
-
-Ist `/home` mit `noexec` gemountet, `PG_BASE` auf ein ausführbares
-Dateisystem legen (z.B. `/opt/local/postgres`, einmalig von root anlegen
-und dem User übergeben).
 
 ## Minor-Upgrade (z.B. 18.6 → 18.7)
 
@@ -177,21 +174,21 @@ Version und bricht dann ab. Das Upgrade selbst läuft mit
 ohne `postgres.env`):
 
 ```bash
-OLD=~/postgres/server/postgresql-17.11
-NEW=~/postgres/server/postgresql-18.6
+OLD=/opt/local/postgres/server/postgresql-17.11
+NEW=/opt/local/postgres/server/postgresql-18.6
 export LD_LIBRARY_PATH=$NEW/lib
 read -rsp "Passwort postgres: " PGPASSWORD; export PGPASSWORD; echo
 
 # Neuer Cluster mit denselben Optionen wie im Skript
-$NEW/bin/initdb -D ~/postgres/data/18 -U postgres --auth=trust \
+$NEW/bin/initdb -D /opt/local/postgres/data/18 -U postgres --auth=trust \
     --data-checksums -E UTF8 --locale-provider=builtin --locale=C.UTF-8
 
 systemctl --user stop postgres
-mkdir -p ~/postgres/upgrade && cd ~/postgres/upgrade
+mkdir -p /opt/local/postgres/upgrade && cd /opt/local/postgres/upgrade
 $NEW/bin/pg_upgrade -U postgres -b $OLD/bin -B $NEW/bin \
-    -d ~/postgres/data/17 -D ~/postgres/data/18 --check
+    -d /opt/local/postgres/data/17 -D /opt/local/postgres/data/18 --check
 $NEW/bin/pg_upgrade -U postgres -b $OLD/bin -B $NEW/bin \
-    -d ~/postgres/data/17 -D ~/postgres/data/18
+    -d /opt/local/postgres/data/17 -D /opt/local/postgres/data/18
 ```
 
 Danach `install.sh` erneut ausführen. Es findet den Cluster in
@@ -200,8 +197,8 @@ von initdb, schreibt die Unit auf `data/18` um und startet den Dienst.
 Anschließend:
 
 ```bash
-set -a; . ~/postgres/etc/postgres.env; set +a
-cd ~/postgres/upgrade
+set -a; . /opt/local/postgres/etc/postgres.env; set +a
+cd /opt/local/postgres/upgrade
 [ -f update_extensions.sql ] && psql -f update_extensions.sql
 vacuumdb --all --analyze-in-stages --missing-stats-only
 ./delete_old_cluster.sh              # erst wenn alles läuft

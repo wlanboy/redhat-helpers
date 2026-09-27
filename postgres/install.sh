@@ -19,7 +19,8 @@
 #     bietet daemon-reload + enable --now an (ohne Nachfrage: ENABLE=j bzw.
 #     ENABLE=n)
 #
-# Verzeichnis: $PG_BASE (Default: ~/postgres)
+# Verzeichnis: $PG_BASE (Default: /opt/local/postgres). Muss vorher als
+#              root angelegt werden und dem User gehören.
 # Port:        $PG_PORT (Default: 5432, nur beim ersten Anlegen der Config)
 # Superuser:   $PG_SUPERUSER (Default: postgres, nur bei initdb)
 #
@@ -53,7 +54,12 @@ if ! systemctl --user show-environment &>/dev/null; then
     exit 1
 fi
 
-BASE=${PG_BASE:-$HOME/postgres}
+BASE=${PG_BASE:-/opt/local/postgres}
+if [[ ! -d "$BASE" || ! -w "$BASE" ]]; then
+    echo "Fehler: $BASE fehlt oder ist nicht beschreibbar. Als root:" >&2
+    echo "  mkdir -p $BASE && chown $USER: $BASE" >&2
+    exit 1
+fi
 PORT=${PG_PORT:-5432}
 SUPERUSER=${PG_SUPERUSER:-postgres}
 DL_DIR="${BASE}/downloads"
