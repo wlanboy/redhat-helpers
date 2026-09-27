@@ -21,7 +21,8 @@
 #
 # Den Cluster selbst bildet danach einmalig: cluster.sh create
 #
-# Verzeichnis: $VALKEY_BASE (Default: ~/valkeycluster)
+# Verzeichnis: $VALKEY_BASE (Default: /opt/local/valkey). Muss vorher als
+# root angelegt werden und dem User gehören.
 #
 # Läuft im User-Kontext (kein root).
 
@@ -66,7 +67,13 @@ if ! systemctl --user show-environment &>/dev/null; then
     exit 1
 fi
 
-BASE=${VALKEY_BASE:-$HOME/valkeycluster}
+BASE=${VALKEY_BASE:-/opt/local/valkey}
+if [[ ! -d "$BASE" || ! -w "$BASE" ]]; then
+    echo "Fehler: $BASE fehlt oder ist nicht beschreibbar. Als root:" >&2
+    echo "  mkdir -p $BASE && chown $USER: $BASE" >&2
+    exit 1
+fi
+
 DL_DIR="${BASE}/downloads"
 SRV_DIR="${BASE}/server/${VALKEY_NAME}"
 ETC_DIR="${BASE}/etc"

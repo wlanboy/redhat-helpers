@@ -22,7 +22,7 @@ set -euo pipefail
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 . "$SCRIPT_DIR/cluster.conf"
 
-BASE=${VALKEY_BASE:-$HOME/valkeycluster}
+BASE=${VALKEY_BASE:-/opt/local/valkey}
 CLI="${BASE}/server/current/bin/valkey-cli"
 
 usage() {

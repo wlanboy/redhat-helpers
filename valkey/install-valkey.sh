@@ -19,7 +19,8 @@
 #     bietet daemon-reload + enable --now an (ohne Nachfrage: ENABLE=j bzw.
 #     ENABLE=n)
 #
-# Verzeichnis: $VALKEY_BASE (Default: ~/valkey)
+# Verzeichnis: $VALKEY_BASE (Default: /opt/local/valkey). Muss vorher als
+#              root angelegt werden und dem User gehören.
 # Port:        $VALKEY_PORT (Default: 6379, nur beim ersten Anlegen der Config)
 #
 # Läuft im User-Kontext (kein root).
@@ -52,7 +53,12 @@ if ! systemctl --user show-environment &>/dev/null; then
     exit 1
 fi
 
-BASE=${VALKEY_BASE:-$HOME/valkey}
+BASE=${VALKEY_BASE:-/opt/local/valkey}
+if [[ ! -d "$BASE" || ! -w "$BASE" ]]; then
+    echo "Fehler: $BASE fehlt oder ist nicht beschreibbar. Als root:" >&2
+    echo "  mkdir -p $BASE && chown $USER: $BASE" >&2
+    exit 1
+fi
 PORT=${VALKEY_PORT:-6379}
 DL_DIR="${BASE}/downloads"
 SRV_DIR="${BASE}/server/${VALKEY_NAME}"

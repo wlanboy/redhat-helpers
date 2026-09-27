@@ -43,6 +43,7 @@ anderen VMs.
 
 ```bash
 loginctl enable-linger valkey
+mkdir -p /opt/local/valkey && chown valkey: /opt/local/valkey
 echo 'vm.overcommit_memory = 1' > /etc/sysctl.d/90-valkey.conf && sysctl --system
 # Client-Ports und Cluster-Bus (Port + 10000)
 firewall-cmd --permanent --add-port=7001-7002/tcp --add-port=17001-17002/tcp
@@ -60,7 +61,7 @@ Auf der ersten VM (Passwort erzeugen lassen oder vorgeben):
 
 ```bash
 valkeycluster/install-valkeycluster.sh
-grep requirepass ~/valkeycluster/etc/auth.conf
+grep requirepass /opt/local/valkey/etc/auth.conf
 ```
 
 Auf den weiteren VMs mit demselben Passwort:
@@ -82,10 +83,10 @@ Die Node-Liste kann auch fest in `cluster.conf` eingetragen werden.
 `systemctl --user` braucht eine echte Login-Session (SSH direkt als User
 oder `machinectl shell valkey@`), nicht `su -` oder `sudo -u`.
 
-Verzeichnisse unter `~/valkeycluster` (änderbar per `VALKEY_BASE`):
+Verzeichnisse unter `/opt/local/valkey` (änderbar per `VALKEY_BASE`):
 
 ```
-~/valkeycluster/
+/opt/local/valkey/
 ├── server/valkey-9.1.2-jammy-x86_64/   + current -> valkey-9.1.2-jammy-x86_64
 ├── etc/auth.conf           requirepass + masterauth, chmod 600
 ├── etc/valkey.env          bei jedem Lauf neu generiert
@@ -103,8 +104,8 @@ und nimmt sie per `valkey-cli --cluster add-node` wieder auf.
 ## Betrieb
 
 ```bash
-set -a; . ~/valkeycluster/etc/valkey.env; set +a
-export VALKEYCLI_AUTH=$(sed -n 's/^requirepass "\(.*\)"$/\1/p' ~/valkeycluster/etc/auth.conf)
+set -a; . /opt/local/valkey/etc/valkey.env; set +a
+export VALKEYCLI_AUTH=$(sed -n 's/^requirepass "\(.*\)"$/\1/p' /opt/local/valkey/etc/auth.conf)
 
 valkey-cli -c -p 7001 set foo bar           # -c folgt MOVED-Redirects
 valkeycluster/cluster.sh info               # Keys und Slots pro Primary

@@ -35,6 +35,7 @@ Zugangsdaten liest `curl` aus `~/.netrc`, falls vorhanden.
 
 ```bash
 loginctl enable-linger valkey
+mkdir -p /opt/local/valkey && chown valkey: /opt/local/valkey
 echo 'vm.overcommit_memory = 1' > /etc/sysctl.d/90-valkey.conf && sysctl --system
 firewall-cmd --permanent --add-port=6379/tcp && firewall-cmd --reload
 ```
@@ -52,10 +53,10 @@ VALKEY_PASSWORD=... ENABLE=j valkey/install-valkey.sh   # ohne Rückfragen
 `systemctl --user` braucht eine echte Login-Session (SSH direkt als User
 oder `machinectl shell valkey@`), nicht `su -` oder `sudo -u`.
 
-Verzeichnisse unter `~/valkey` (änderbar per `VALKEY_BASE`):
+Verzeichnisse unter `/opt/local/valkey` (änderbar per `VALKEY_BASE`):
 
 ```
-~/valkey/
+/opt/local/valkey/
 ├── server/valkey-9.1.2-jammy-x86_64/  + current -> valkey-9.1.2-jammy-x86_64
 ├── etc/valkey.conf     einmalig angelegt, danach eigene Pflege
 ├── etc/auth.conf       requirepass, chmod 600, einmalig angelegt
@@ -69,7 +70,7 @@ Der Port (`VALKEY_PORT`, Default 6379) wird nur beim ersten Anlegen von
 `valkey.conf` eingetragen.
 
 ```bash
-set -a; . ~/valkey/etc/valkey.env; set +a
+set -a; . /opt/local/valkey/etc/valkey.env; set +a
 valkey-cli --askpass ping
 ```
 
