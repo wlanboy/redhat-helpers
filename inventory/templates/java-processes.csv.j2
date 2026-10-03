@@ -1,0 +1,8 @@
+host;app;pid;user;address;port;local_only;scheme;metrics_path;cmdline
+{% for h in ansible_play_hosts | sort %}
+{% for p in hostvars[h].java_procs | default([]) %}
+{% for e in p.ports %}
+{{ h }};{{ p.app }};{{ p.pid }};{{ p.user }};{{ e.address }};{{ e.port }};{{ e.local_only | lower }};{{ e.scheme or '' }};{{ e.metrics_path or '' }};"{{ p.cmdline | replace('"', '""') }}"
+{% endfor %}
+{% endfor %}
+{% endfor %}

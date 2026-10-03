@@ -1,0 +1,20 @@
+# Generiert von java-ports.yml – nicht manuell bearbeiten.
+# Prometheus file_sd_configs, eingebunden über prometheus-scrape-config.yml.
+{% set ns = namespace(count=0) %}
+{% for h in ansible_play_hosts | sort %}
+{% for p in hostvars[h].java_procs | default([]) %}
+{% for e in p.ports if not e.local_only and (e.metrics_path or not java_ports_probe | bool) %}
+{% set ns.count = ns.count + 1 %}
+- targets:
+    - "{{ hostvars[h].prometheus_target_host | default(h) }}:{{ e.port }}"
+  labels:
+    app: "{{ p.app }}"
+    host: "{{ h }}"
+    __metrics_path__: "{{ e.metrics_path or java_ports_metrics_paths[0] }}"
+    __scheme__: "{{ e.scheme or 'http' }}"
+{% endfor %}
+{% endfor %}
+{% endfor %}
+{% if ns.count == 0 %}
+[]
+{% endif %}

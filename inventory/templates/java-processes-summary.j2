@@ -1,0 +1,7 @@
+{% if not java_procs %}
+keine Java-Prozesse mit Listen-Ports gefunden
+{% endif %}
+{% for p in java_procs %}
+{{ p.app }} (pid {{ p.pid }}, user {{ p.user }}): {% for e in p.ports %}{{ e.address }}:{{ e.port }}{% if e.metrics_path %} [{{ e.scheme }}{{ e.metrics_path }}]{% endif %}{% if e.local_only %} (nur lokal){% endif %}{{ ', ' if not loop.last }}{% endfor %}
+
+{% endfor %}

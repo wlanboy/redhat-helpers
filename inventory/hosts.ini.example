@@ -1,0 +1,10 @@
+# Kopieren nach hosts.ini und anpassen.
+# prometheus_target_host: Name/IP, unter dem Prometheus den Host erreicht
+# (Default: der Inventory-Name).
+[java]
+app01.example.local
+app02.example.local prometheus_target_host=10.0.0.12
+
+[java:vars]
+# User, unter dem die Java-Prozesse laufen
+ansible_user=deploy

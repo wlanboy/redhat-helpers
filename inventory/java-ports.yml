@@ -1,0 +1,61 @@
+---
+# Listet alle Java-Prozesse mit ihren TCP-Listen-Ports auf allen Hosts
+# und erzeugt daraus eine file_sd-Datei für Prometheus.
+#
+#   ansible-playbook -i hosts.ini java-ports.yml
+#   ansible-playbook -i hosts.ini java-ports.yml -e java_ports_probe=false
+#
+# Ergebnis liegt in output/ (siehe readme.md).
+- name: Java-Prozesse und Ports einsammeln
+  hosts: "{{ java_ports_hosts | default('all') }}"
+  gather_facts: false
+  # Läuft als Deploy-User, dem die Java-Prozesse gehören. ss -p zeigt
+  # ohne root nur dessen eigene Prozesse.
+  become: false
+  vars:
+    java_ports_probe: true
+    java_ports_metrics_paths:
+      - /actuator/prometheus
+    java_ports_probe_timeout: 2
+    java_ports_output_dir: "{{ playbook_dir }}/output"
+
+  tasks:
+    - name: Java-Prozesse und Listen-Ports ermitteln
+      ansible.builtin.script:
+        cmd: >-
+          files/java_ports.py
+          --paths {{ java_ports_metrics_paths | join(',') | quote }}
+          --timeout {{ java_ports_probe_timeout }}
+          {{ '--probe' if java_ports_probe | bool else '' }}
+        executable: python3
+      register: java_ports_raw
+      changed_when: false
+      check_mode: false
+
+    - name: JSON-Ausgabe übernehmen
+      ansible.builtin.set_fact:
+        java_procs: "{{ java_ports_raw.stdout | from_json }}"
+
+    - name: Gefundene Java-Prozesse anzeigen
+      ansible.builtin.debug:
+        msg: "{{ lookup('ansible.builtin.template', 'templates/java-processes-summary.j2') | trim | split('\n') }}"
+
+    - name: Ausgabeverzeichnis anlegen
+      ansible.builtin.file:
+        path: "{{ java_ports_output_dir }}"
+        state: directory
+        mode: "0755"
+      delegate_to: localhost
+      run_once: true
+
+    - name: Ergebnisdateien schreiben
+      ansible.builtin.template:
+        src: "templates/{{ item }}.j2"
+        dest: "{{ java_ports_output_dir }}/{{ item }}"
+        mode: "0644"
+      loop:
+        - java-processes.csv
+        - java-targets.yml
+        - prometheus-scrape-config.yml
+      delegate_to: localhost
+      run_once: true

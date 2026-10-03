@@ -1,0 +1,11 @@
+# Generiert von java-ports.yml – in prometheus.yml unter scrape_configs einfügen
+# und java-targets.yml nach {{ java_ports_sd_dir | default('/etc/prometheus/file_sd') }}/ kopieren.
+# Prometheus liest die Datei bei Änderungen automatisch neu ein.
+scrape_configs:
+  - job_name: java
+    # Ports mit selbstsignierten Zertifikaten (__scheme__ https)
+    tls_config:
+      insecure_skip_verify: true
+    file_sd_configs:
+      - files:
+          - {{ java_ports_sd_dir | default('/etc/prometheus/file_sd') }}/java-targets.yml
