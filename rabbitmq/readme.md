@@ -44,7 +44,8 @@ Runtime-VMs müssen beide RHEL 9 mit gleicher Architektur sein.
   Rechte, Firewall).
 - **install-build-deps.sh** – root, Build-VM. Installiert Compiler und
   `-devel`-Pakete.
-- **build-erlang.sh** – User, Build-VM. Lädt den OTP-Quellcode, baut ohne
+- **build-erlang.sh** – User, Build-VM. Lädt den OTP-Quellcode (oder nimmt
+  `otp_src_<OTP_VERSION>.tar.gz` aus dem Skriptordner, falls vorhanden), baut ohne
   Java/wx/ODBC, bricht ab wenn OpenSSL fehlt, testet `crypto`/`ssl`, packt
   den Tarball und lädt ihn optional nach Nexus hoch.
 - **prepare-runtime.sh** – User, Runtime-VM. Prüft Laufzeit-Bibliotheken,

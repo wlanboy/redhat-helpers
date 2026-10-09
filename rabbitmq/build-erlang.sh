@@ -5,6 +5,7 @@
 # Baut Erlang/OTP auf der Build-VM als normaler User und erzeugt einen
 # verschiebbaren Tarball für die Runtime-VMs:
 #   - lädt otp_src_<OTP_VERSION>.tar.gz über den Nexus GitHub-Proxy
+#     (kein Download, wenn der Tarball neben diesem Skript liegt)
 #   - prüft optional den SHA256 (OTP_SHA256 in versions.conf)
 #   - configure ohne Java/wx/ODBC/GUI-Tools, mit OpenSSL (Pflicht für RabbitMQ)
 #   - bricht ab, wenn configure die crypto-Applikation überspringt
@@ -51,14 +52,19 @@ DIST_DIR="${WORK_DIR}/dist"
 mkdir -p "$WORK_DIR" "$DIST_DIR" "${WORK_DIR}/release"
 
 echo "== Lade Erlang/OTP ${OTP_VERSION} =="
-if [[ -f "${WORK_DIR}/${SRC_TGZ}" ]]; then
-    echo "Bereits vorhanden: ${WORK_DIR}/${SRC_TGZ}"
+if [[ -f "${SCRIPT_DIR}/${SRC_TGZ}" ]]; then
+    SRC_FILE="${SCRIPT_DIR}/${SRC_TGZ}"
+    echo "Lokal vorhanden: ${SRC_FILE}"
+elif [[ -f "${WORK_DIR}/${SRC_TGZ}" ]]; then
+    SRC_FILE="${WORK_DIR}/${SRC_TGZ}"
+    echo "Bereits vorhanden: ${SRC_FILE}"
 else
-    curl -fL --netrc-optional -o "${WORK_DIR}/${SRC_TGZ}.part" "$SRC_URL"
-    mv "${WORK_DIR}/${SRC_TGZ}.part" "${WORK_DIR}/${SRC_TGZ}"
+    SRC_FILE="${WORK_DIR}/${SRC_TGZ}"
+    curl -fL --netrc-optional -o "${SRC_FILE}.part" "$SRC_URL"
+    mv "${SRC_FILE}.part" "$SRC_FILE"
 fi
 
-ACTUAL_SHA=$(sha256sum "${WORK_DIR}/${SRC_TGZ}" | awk '{print $1}')
+ACTUAL_SHA=$(sha256sum "$SRC_FILE" | awk '{print $1}')
 if [[ -n "$OTP_SHA256" ]]; then
     if [[ "$ACTUAL_SHA" != "$OTP_SHA256" ]]; then
         echo "Fehler: SHA256 stimmt nicht." >&2
@@ -74,7 +80,7 @@ fi
 
 echo "== Entpacke Quellcode =="
 rm -rf "$SRC_DIR"
-tar -C "$WORK_DIR" -xzf "${WORK_DIR}/${SRC_TGZ}"
+tar -C "$WORK_DIR" -xzf "$SRC_FILE"
 
 cd "$SRC_DIR"
 export ERL_TOP="$SRC_DIR"
