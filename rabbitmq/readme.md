@@ -52,6 +52,9 @@ Runtime-VMs müssen beide RHEL 9 mit gleicher Architektur sein.
   Lingering, `systemctl --user`, `/opt/local/rabbitmq` und Hostname. Gibt fehlende root-Schritte aus.
 - **install-rabbitmq.sh** – User, Runtime-VM. Installation, Konfiguration,
   Erlang-Cookie, systemd User Unit.
+- **urls.txt** – Upstream-URLs von OTP-Quellcode und RabbitMQ-Tarball
+  (inkl. `.asc`) für die Default-Versionen (z.B. für Firewall-Freigaben
+  oder manuellen Download per `wget -i urls.txt`).
 
 ## Ablauf
 
@@ -133,7 +136,7 @@ starten.
 
 ## Upgrade
 
-1. Neue Versionen in `versions.conf` eintragen (Kompatibilität prüfen:
+1. Neue Versionen in `versions.conf` und `urls.txt` eintragen (Kompatibilität prüfen:
    https://www.rabbitmq.com/docs/which-erlang).
 2. Bei neuer Erlang-Version: `build-erlang.sh` auf der Build-VM.
 3. Vor einem RabbitMQ-Minor/Major-Upgrade alle Feature Flags aktivieren:

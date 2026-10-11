@@ -13,6 +13,9 @@ Bibliotheken per `ldd`.
   überschreiben.
 - **install-valkey.sh** – als User, Runtime-VM. Download aus Nexus,
   SHA256-Prüfung, Konfiguration, Passwort, systemd User Unit.
+- **urls.txt** – Upstream-URLs von Tarball und `.sha256` für die
+  Default-Version (z.B. für Firewall-Freigaben oder manuellen Download
+  per `wget -i urls.txt`).
 
 ## Nexus
 
@@ -76,7 +79,7 @@ valkey-cli --askpass ping
 
 ## Upgrade
 
-Neue Version in `versions.conf` eintragen und `install-valkey.sh` erneut
+Neue Version in `versions.conf` und `urls.txt` eintragen und `install-valkey.sh` erneut
 ausführen. Die neue Version wird neben die alte entpackt, `current`
 umgebogen und der Dienst neu gestartet. `data/` und `etc/` bleiben
 erhalten. Rollback: `current` zurücksetzen und

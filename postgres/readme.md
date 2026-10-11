@@ -35,6 +35,9 @@ Runtime-VMs müssen beide RHEL 9 mit gleicher Architektur sein.
 - **build.sh** – als User, Build-VM. Download der RPMs, Signaturprüfung,
   Entpacken, Tarball mit `BUILD_INFO` und `.sha256`, optional Upload nach
   Nexus.
+- **urls.txt** – Upstream-URLs der RPMs und des GPG-Keys für die
+  Default-Version (z.B. für Firewall-Freigaben oder manuellen Download
+  per `wget -i urls.txt`).
 - **install.sh** – als User, Runtime-VM. Download des Tarballs,
   SHA256-Prüfung, Entpacken, `ldd`-Check, initdb, Konfiguration, systemd
   User Unit.
@@ -159,7 +162,7 @@ systemctl --user reload postgres     # nach Änderungen an pg_hba.conf
 
 ## Minor-Upgrade (z.B. 18.6 → 18.7)
 
-Neue Version und Release-Tag in `versions.conf` eintragen, auf der
+Neue Version und Release-Tag in `versions.conf` und `urls.txt` eintragen, auf der
 Build-VM `build.sh` ausführen, dann auf jeder Runtime-VM `install.sh`. Die
 neue Version wird neben die alte entpackt, `current` umgebogen und der Dienst neu gestartet. `data/`
 und `etc/` bleiben erhalten. Rollback: `current` zurücksetzen und
