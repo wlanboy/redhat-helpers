@@ -32,6 +32,13 @@ Python-Pendant zu `manage-user-units.sh` mit mehr Funktionsumfang
 Journal, Unit-Generator für Java-/Python-Anwendungen). Siehe
 [unit/userunits.md](unit/userunits.md).
 
+### podman/
+
+Anleitung für rootless Podman als systemd User Unit (Quadlet) mit
+Images/Volumes auf `/opt/local` und Pulls aus Nexus: was root vorbereiten
+muss (subuid/subgid, Linger, Storage, SELinux, Registry, Firewall) und was
+der Service-User selbst konfiguriert. Siehe [podman/podman.md](podman/podman.md).
+
 ### rabbitmq/
 
 Erlang/OTP auf einer Build-VM als non-root bauen und als Tarball in Nexus
