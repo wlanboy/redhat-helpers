@@ -1,16 +1,16 @@
 [project]
 name = "hdfs"
 version = "0.1.0"
-description = "hdfs helper"
-readme = "README.md"
+description = "ACL-Metadaten (user.acl) in HDFS einsammeln, durchsuchen und ändern"
+readme = "hdfs.md"
 authors = [
     { name = "wlanboy", email = "wlanboy@github.com" }
 ]
-requires-python = ">=3.14"
+requires-python = ">=3.9"
 dependencies = []
 
 [project.scripts]
-hdfs = "hdfs:main"
+hdfs-acl = "hdfs.main:main"
 
 [build-system]
 requires = ["uv_build>=0.12.22,<0.13.0"]

@@ -1,0 +1,6 @@
+hdfs-acl.db
+hdfs-acl.db.tmp
+hdfs-acl-backup-*.csv
+__pycache__/
+.venv/
+uv.lock
