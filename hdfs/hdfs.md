@@ -20,13 +20,27 @@ Beispiel: `@client1|@client2=3,svc_backup=1,@client3=1,#ops=3` ergibt
 
 ## hdfs-acl – ACLs einsammeln, suchen, migrieren
 
-`src/hdfs/main.py`, nur Standardbibliothek, läuft ab Python 3.9 (RHEL 9).
+Paket `src/hdfs/`, nur Standardbibliothek, läuft ab Python 3.9 (RHEL 9).
 Direkt aufrufbar oder über uv:
 
 ```bash
 python3 src/hdfs/main.py <kommando> ...
 uv run hdfs-acl <kommando> ...
 ```
+
+| Datei            | Inhalt                                                             |
+|------------------|--------------------------------------------------------------------|
+| `main.py`        | Einstieg: Argumente (argparse), Fehlerbehandlung                   |
+| `commands.py`    | ein `cmd_*` je Kommando, gemeinsamer Ablauf `execute()` fürs Ändern |
+| `acl.py`         | ACL-Format parsen/prüfen, effektive Rechte, Vererbung              |
+| `changes.py`     | `Change` und `plan_*`: was `add`/`replace`/`remove`/`restore` ändern |
+| `hdfs_client.py` | `hdfs dfs -getfattr/-setfattr` aufrufen, Java suchen               |
+| `store.py`       | SQLite-Schema, DB schreiben/öffnen, Backup-CSV                     |
+| `output.py`      | Ausgabe als Tabelle, CSV oder JSON                                 |
+| `common.py`      | Fehlerklassen, Meldungen auf stderr, natürliche Sortierung         |
+
+`acl.py` und `changes.py` arbeiten nur auf Strings und lassen sich ohne
+HDFS testen.
 
 Für den HDFS-Client gelten dieselben Variablen wie bei `test.sh`
 (`HADOOP_REPO`, `HADOOP_HOME`, `HADOOP_CONF_DIR`, `HDFS_JAVA_HOME`), siehe
