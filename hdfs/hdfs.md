@@ -162,7 +162,16 @@ BASE_DIR=/acltest ACL_ATTR=user.rights ./test.sh --clean
 Der Hadoop-3.4.2-Client läuft nicht mit Java ≥ 23 (`getSubject is not
 supported`). Ohne `HDFS_JAVA_HOME` nimmt das Skript das erste Java < 23 aus
 `$HADOOP_REPO/downloads/jdk-11`, sdkman (`~/.sdkman/candidates/java/11*`,
-`17*`) oder `$JAVA_HOME`. Ein sdkman-`current` auf Java 25 stört also nicht.
+`17*`), `/usr/lib/jvm/{jre,java}-{11,17}*` oder `$JAVA_HOME`. Ein
+sdkman-`current` auf Java 25 stört also nicht.
+
+Auf RHEL 9 genügt:
+
+```bash
+sudo dnf install python3 java-17-openjdk-headless   # optional: sqlite diffutils
+```
+
+Der Hadoop-Client selbst kommt als Tarball (`HADOOP_HOME`, `HADOOP_CONF_DIR`).
 
 ### Vergleichsdateien
 

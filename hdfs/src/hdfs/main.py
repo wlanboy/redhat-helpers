@@ -192,6 +192,9 @@ def find_java(repo: Path) -> Path:
     sdkman = Path.home() / ".sdkman" / "candidates" / "java"
     candidates = [repo / "downloads" / "jdk-11"]
     candidates += sorted(sdkman.glob("11*")) + sorted(sdkman.glob("17*"))
+    # dnf: java-{11,17}-openjdk-headless
+    for pattern in ("jre-11*", "java-11*", "jre-17*", "java-17*"):
+        candidates += sorted(Path("/usr/lib/jvm").glob(pattern))
     if os.environ.get("JAVA_HOME"):
         candidates.append(Path(os.environ["JAVA_HOME"]))
     for home in candidates:

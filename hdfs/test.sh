@@ -47,7 +47,8 @@
 #   HADOOP_HOME   Hadoop-Client (Default $HADOOP_REPO/downloads/hadoop-3.4.2)
 #   HADOOP_CONF_DIR  Client-Konfiguration (Default $HADOOP_REPO/clientconfig)
 #   HDFS_JAVA_HOME   Java 11/17 für den Client. Ohne Angabe wird gesucht in
-#                    $HADOOP_REPO/downloads/jdk-11, sdkman (11*, 17*), $JAVA_HOME.
+#                    $HADOOP_REPO/downloads/jdk-11, sdkman (11*, 17*),
+#                    /usr/lib/jvm/{jre,java}-{11,17}* (dnf), $JAVA_HOME.
 #                    Java >= 23 geht nicht (Subject.getSubject entfernt).
 
 set -euo pipefail
@@ -120,6 +121,8 @@ setup_hdfs() {
         for candidate in "$HADOOP_REPO/downloads/jdk-11" \
                          "$HOME"/.sdkman/candidates/java/11* \
                          "$HOME"/.sdkman/candidates/java/17* \
+                         /usr/lib/jvm/jre-11* /usr/lib/jvm/java-11* \
+                         /usr/lib/jvm/jre-17* /usr/lib/jvm/java-17* \
                          "${JAVA_HOME:-}"; do
             if java_usable "$candidate"; then
                 java_home=$candidate
