@@ -47,8 +47,8 @@ der Ebenen. Ergebnis ist eine SQLite-Datei mit den Tabellen
 | Tabelle     | Inhalt                                                          |
 |-------------|-----------------------------------------------------------------|
 | `node`      | jeder Pfad mit Roh-ACL, `acl_from` (wessen ACL gilt), Warnungen |
-| `entry`     | eigene ACL-Einträge aller Arten (client/user/group), Besitzer   |
-| `effective` | effektives Recht je `@clientid` und Pfad, Vererbung aufgelöst   |
+| `entry`     | nur **aktiv gesetzte** Einträge aller Arten (client/user/group) inkl. Besitzer |
+| `effective` | effektives Recht je `@clientid` und Pfad, Vererbung aufgelöst (berechnet) |
 | `meta`      | Basisordner, Attribut, Zeitpunkt der Sammlung                   |
 
 Die DB wird bei jedem `collect` komplett neu geschrieben, Abfragen gehen auch
@@ -59,7 +59,8 @@ Eintrag ohne `=<zahl>`, Recht nicht 1/3) meldet `collect` als Warnung.
 
 ```bash
 hdfs-acl search @client3                 # alle Pfade mit Rechten, inkl. geerbter
-hdfs-acl search client3 --own           # nur wo direkt eingetragen
+hdfs-acl search client3 --own           # nur aktiv gesetzte, mit Roh-ACL
+hdfs-acl search '@*' --own --format csv # alle aktiv gesetzten ACLs pro clientid
 hdfs-acl search '@client*' --perm 3     # Glob, nur Lesen+Schreiben+Löschen
 hdfs-acl search @client3 --format csv   # oder json
 hdfs-acl clients                         # alle clientids mit Anzahl Pfade
@@ -67,12 +68,14 @@ hdfs-acl show /fs/account3/container10   # ACL, Herkunft und Rechte eines Pfads
 hdfs-acl export -o export.csv            # Format wie testdata/expected.csv
 ```
 
-Das `@` an der clientid kann man weglassen. Suchen arbeiten auf dem Stand
+Ausgabe sortiert nach clientid, dann Pfad. `--own` liest aus `entry` und
+zeigt statt `acl_from` die Roh-ACL des Pfads. Das `@` an der clientid kann
+man weglassen. Suchen arbeiten auf dem Stand
 des letzten `collect`, der Zeitpunkt steht auf stderr.
 
 ### Ändern
 
-`add`, `remove` und `restore` lesen HDFS vorher frisch ein, zeigen für jeden
+`add`, `replace`, `remove` und `restore` lesen HDFS vorher frisch ein, zeigen für jeden
 betroffenen Pfad alt/neu und schreiben **erst mit `--apply`**. Vor dem
 Schreiben legen sie neben der DB ein Backup `hdfs-acl-backup-<zeit>-<aktion>.csv`
 an (`path;old;new`). Danach lesen sie HDFS erneut und prüfen jeden geänderten Wert.
@@ -94,6 +97,19 @@ hdfs-acl add @client3 @newapp --apply
 - Mehrfach ausführen ist unschädlich.
 
 ```bash
+# ALT direkt durch NEU ersetzen, auch als Besitzer
+hdfs-acl replace @client3 @newapp
+hdfs-acl replace @client3 @newapp --apply
+```
+
+- Besitzer `@client3` wird Besitzer `@newapp`, Einträge `@client3=x` werden
+  an derselben Stelle zu `@newapp=x`.
+- Hatte `@newapp` schon einen Eintrag, bleibt einer mit dem höheren Recht.
+  Ist `@newapp` danach Besitzer, entfallen seine Einträge (Besitzer hat 3).
+- `@newapp` hat danach überall genau die Rechte, die `@client3` hatte (plus
+  seine eigenen), `@client3` nirgends mehr.
+
+```bash
 # Client-ID überall entfernen
 hdfs-acl remove @client3
 hdfs-acl remove @client3 --apply
@@ -104,7 +120,21 @@ Pfade, an denen die clientid **Besitzer** ist, werden ohne `--new-owner`
 übersprungen und aufgelistet (Exit-Code 2), weil eine ACL einen Besitzer
 braucht. Bleibt nach dem Entfernen nur der Besitzer übrig, wird die ACL zu
 `<besitzer>|`. Bei einem Container bedeutet das weiterhin: Die Account-ACL
-gilt dort nicht.
+gilt dort nicht. Mit `--new-owner` entfallen die Einträge des neuen
+Besitzers, weil er als Besitzer ohnehin 3 hat.
+
+Migration in zwei Schritten (erst ergänzen, Anwendung umstellen, dann
+aufräumen):
+
+```bash
+hdfs-acl add @client3 @newapp --apply                          # @newapp=3 auch, wo @client3 Besitzer ist
+# ... Anwendung auf @newapp umstellen ...
+hdfs-acl remove @client3 --new-owner @newapp --apply           # @newapp wird dort Besitzer
+```
+
+Die Rechte sind danach dieselben wie bei `replace @client3 @newapp`. Nur die
+Reihenfolge der Einträge kann abweichen, weil `add` neue Einträge hinten
+anhängt.
 
 ```bash
 # zurückdrehen

@@ -10,10 +10,11 @@ Kommandos:
   show PFAD           ACL und effektive Rechte eines Pfads
   export              effektive Rechte als CSV (Format wie testdata/expected.csv)
   add QUELLE NEU      NEU überall mit den Rechten von QUELLE ergänzen (Migration)
+  replace ALT NEU     ALT überall durch NEU ersetzen, auch als Besitzer
   remove CLIENTID     clientid aus allen ACLs entfernen
   restore BACKUP      Änderungen aus einer Backup-Datei zurückdrehen
 
-add/remove/restore lesen HDFS vorher frisch ein, zeigen den Plan und
+add/replace/remove/restore lesen HDFS vorher frisch ein, zeigen den Plan und
 schreiben erst mit --apply. Vor dem Schreiben wird ein Backup angelegt.
 
 Nur Standardbibliothek, läuft ab Python 3.9.
@@ -436,18 +437,22 @@ def cmd_search(args: argparse.Namespace) -> int:
     pattern = client_id(args.clientid, allow_glob=True)
     con = open_db(Path(args.db))
     if args.own:
-        sql = """SELECT path, principal, MAX(perm), MAX(owner), path FROM entry
-                 WHERE kind = 'client' AND principal GLOB ?
-                 GROUP BY path, principal"""
+        # nur aktiv gesetzte Einträge, letzte Spalte ist die Roh-ACL des Pfads
+        columns = ["path", "clientid", "perm", "owner", "acl"]
+        sql = """SELECT e.path, e.principal, MAX(e.perm), MAX(e.owner), n.acl
+                 FROM entry e JOIN node n ON n.path = e.path
+                 WHERE e.kind = 'client' AND e.principal GLOB ?
+                 GROUP BY e.path, e.principal"""
     else:
+        columns = ["path", "clientid", "perm", "owner", "acl_from"]
         sql = "SELECT path, clientid, perm, owner, acl_from FROM effective WHERE clientid GLOB ?"
     rows = [
-        (path, clientid, perm, bool(owner), acl_from)
-        for path, clientid, perm, owner, acl_from in con.execute(sql, (pattern,))
+        (path, clientid, perm, bool(owner), last)
+        for path, clientid, perm, owner, last in con.execute(sql, (pattern,))
         if args.perm is None or perm == args.perm
     ]
-    rows.sort(key=lambda r: (natural_key(r[0]), natural_key(r[1])))
-    output(["path", "clientid", "perm", "owner", "acl_from"], rows, args.format)
+    rows.sort(key=lambda r: (natural_key(r[1]), natural_key(r[0])))
+    output(columns, rows, args.format)
     info(f"{len(rows)} Treffer")
     return 0
 
@@ -519,12 +524,47 @@ def plan_add(nodes: dict, source: str, new: str) -> tuple:
         perm = rights[source][0]
         if rights.get(new, (0, False))[0] >= perm:
             continue
-        # vorhandene schwächere Einträge von NEU durch einen ersetzen
-        tokens = [t for t in acl.tokens if split_token(t)[0] != new]
-        position = next((i for i, t in enumerate(acl.tokens) if split_token(t)[0] == new), len(tokens))
-        tokens.insert(position, f"{new}={perm}")
+        # anhängen; vorhandene schwächere Einträge von NEU werden an ihrer Stelle hochgestuft
+        tokens = merge_entries(acl.tokens + [f"{new}={perm}"], new, drop=False)
         changes.append(Change(path, raw, Acl(acl.owner, tokens).render()))
     return changes, found
+
+
+def merge_entries(tokens: list, principal: str, drop: bool) -> list:
+    """Fasst mehrere Einträge von principal zu einem mit dem höchsten Recht an der
+    ersten Stelle zusammen; drop=True entfernt sie (principal ist Besitzer)."""
+    perms = [perm for p, perm in map(split_token, tokens) if p == principal and perm is not None]
+    if not perms:
+        return tokens
+    merged = []
+    placed = drop
+    for token in tokens:
+        if split_token(token)[0] != principal:
+            merged.append(token)
+        elif not placed:
+            merged.append(f"{principal}={max(perms)}")
+            placed = True
+    return merged
+
+
+def plan_replace(nodes: dict, old: str, new: str) -> list:
+    changes = []
+    for path, raw in nodes.items():
+        if raw is None:
+            continue  # erbt; wird über den Elternordner mitgeändert
+        acl = Acl.parse(raw)
+        if acl.owner != old and all(split_token(t)[0] != old for t in acl.tokens):
+            continue
+        owner = new if acl.owner == old else acl.owner
+        # ALT an derselben Stelle in NEU umbenennen; hatte NEU schon einen Eintrag,
+        # bleibt einer mit dem höheren Recht, als Besitzer braucht NEU keinen
+        tokens = []
+        for token in acl.tokens:
+            principal, perm = split_token(token)
+            tokens.append(f"{new}={perm}" if principal == old and perm is not None else token)
+        tokens = merge_entries(tokens, new, drop=owner == new)
+        changes.append(Change(path, raw, Acl(owner, tokens).render()))
+    return changes
 
 
 def plan_remove(nodes: dict, clientid: str, new_owner: Optional[str]) -> tuple:
@@ -541,6 +581,9 @@ def plan_remove(nodes: dict, clientid: str, new_owner: Optional[str]) -> tuple:
                 continue
             owner = new_owner
         tokens = [t for t in acl.tokens if split_token(t)[0] != clientid]
+        if owner != acl.owner:
+            # z. B. nach add ALT NEU: NEU=3 ist als Besitzer überflüssig
+            tokens = merge_entries(tokens, owner, drop=True)
         if owner != acl.owner or tokens != acl.tokens:
             changes.append(Change(path, raw, Acl(owner, tokens).render()))
     return changes, owned
@@ -586,6 +629,18 @@ def cmd_add(args: argparse.Namespace) -> int:
         print(f"{source} steht in keiner ACL.")
         return 0
     return execute(args, hdfs, f"add-{new[1:]}", changes)
+
+
+def cmd_replace(args: argparse.Namespace) -> int:
+    old, new = client_id(args.old), client_id(args.new)
+    if old == new:
+        raise UsageError("ALT und NEU sind gleich.")
+    hdfs = Hdfs(args.parallel)
+    changes = plan_replace(refresh(args, hdfs), old, new)
+    if not changes:
+        print(f"{old} steht in keiner ACL.")
+        return 0
+    return execute(args, hdfs, f"replace-{old[1:]}-{new[1:]}", changes)
 
 
 def cmd_remove(args: argparse.Namespace) -> int:
@@ -683,9 +738,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("new", metavar="NEU", help="clientid, die dieselben Rechte bekommt")
     p.set_defaults(func=cmd_add)
 
+    p = sub.add_parser("replace", parents=[db_opts, hdfs_opts, write_opts],
+                       help="clientid ersetzen, auch als Besitzer")
+    p.add_argument("old", metavar="ALT", help="clientid, die verschwindet")
+    p.add_argument("new", metavar="NEU", help="clientid, die ihre Stelle einnimmt")
+    p.set_defaults(func=cmd_replace)
+
     p = sub.add_parser("remove", parents=[db_opts, hdfs_opts, write_opts], help="clientid entfernen")
     p.add_argument("clientid")
-    p.add_argument("--new-owner", help="neuer Besitzer, wo CLIENTID Besitzer ist (sonst übersprungen)")
+    p.add_argument("--new-owner", help="neuer Besitzer, wo CLIENTID Besitzer ist (sonst übersprungen); "
+                                       "dessen eigene Einträge entfallen dann")
     p.set_defaults(func=cmd_remove)
 
     p = sub.add_parser("restore", parents=[db_opts, hdfs_opts, write_opts],
