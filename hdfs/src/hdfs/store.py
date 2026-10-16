@@ -1,8 +1,9 @@
 """Ablage: SQLite-Datenbank mit dem eingesammelten Stand und Backup-Dateien.
 
-Die DB ist ein Abbild von HDFS zum Zeitpunkt des letzten collect. Sie wird
-jedes Mal komplett neu geschrieben, nie fortgeschrieben. Lesende Kommandos
-(search, clients, show, export) brauchen deshalb kein HDFS.
+Die DB ist ein Abbild von HDFS zum Zeitpunkt des Einlesens (fsimage oder
+live), nach ändernden Kommandos inklusive deren Änderungen. Sie wird jedes Mal
+komplett neu geschrieben, nie fortgeschrieben. Lesende Kommandos (search,
+clients, show, export) brauchen deshalb kein HDFS.
 """
 
 from __future__ import annotations
@@ -55,9 +56,12 @@ CREATE INDEX effective_clientid ON effective (clientid);
 """
 
 
-def save(db: Path, base: str, attr: str, depth: int, nodes: dict) -> None:
+def save(db: Path, base: str, attr: str, depth: int, origin: str, nodes: dict) -> None:
     """Schreibt die DB komplett neu (über eine Temp-Datei, damit eine
-    abgebrochene Sammlung den alten Stand nicht zerstört)."""
+    abgebrochene Sammlung den alten Stand nicht zerstört).
+
+    origin beschreibt die Herkunft (fsimage-Datei oder live) für die Anzeige.
+    """
     tmp = db.with_name(db.name + ".tmp")
     tmp.unlink(missing_ok=True)
     con = sqlite3.connect(tmp)
@@ -98,6 +102,7 @@ def save(db: Path, base: str, attr: str, depth: int, nodes: dict) -> None:
         "base_dir": base,
         "attr": attr,
         "depth": str(depth),
+        "source": origin,
         "collected_at": datetime.now().isoformat(timespec="seconds"),
     }
     con.executemany("INSERT INTO meta VALUES (?, ?)", meta.items())
@@ -114,7 +119,7 @@ def open_db(db: Path) -> sqlite3.Connection:
     # mode=ro: sqlite3.connect würde eine fehlende Datei sonst still neu anlegen
     con = sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True)
     meta = dict(con.execute("SELECT key, value FROM meta"))
-    info(f"Stand {meta['collected_at']}, {meta['base_dir']}, {meta['attr']} ({db})")
+    info(f"Stand {meta['collected_at']} aus {meta.get('source', '?')}, {meta['base_dir']}, {meta['attr']} ({db})")
     return con
 
 
