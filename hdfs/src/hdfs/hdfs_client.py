@@ -158,14 +158,15 @@ class Hdfs:
     """Ein konfigurierter HDFS-Client. Der Konstruktor sucht Hadoop und Java und
     bricht mit HdfsError ab, wenn etwas fehlt, bevor irgendetwas gelesen wird."""
 
-    def __init__(self, parallel: int):
-        # Defaults passen zum Checkout ~/git/hadoop, alles per Umgebung änderbar
+    def __init__(self, parallel: int, version: str):
+        # Defaults passen zum Checkout ~/git/hadoop, alles per Umgebung änderbar;
+        # version bestimmt nur den Default von HADOOP_HOME
         repo = Path(os.environ.get("HADOOP_REPO", "~/git/hadoop")).expanduser()
-        home = Path(os.environ.get("HADOOP_HOME", repo / "downloads" / "hadoop-3.4.2")).expanduser()
+        home = Path(os.environ.get("HADOOP_HOME", repo / "downloads" / f"hadoop-{version}")).expanduser()
         conf = Path(os.environ.get("HADOOP_CONF_DIR", repo / "clientconfig")).expanduser()
         self.bin = home / "bin" / "hdfs"
         if not self.bin.is_file():
-            raise HdfsError(f"{self.bin} nicht gefunden (HADOOP_HOME setzen).")
+            raise HdfsError(f"{self.bin} nicht gefunden (HADOOP_HOME oder --hadoop-version setzen).")
         java_home = find_java(repo)
         # eigene Umgebung nur für die hdfs-Unterprozesse, os.environ bleibt unverändert
         self.env = {

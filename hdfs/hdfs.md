@@ -44,8 +44,9 @@ uv run hdfs-acl <kommando> ...
 Streams und lassen sich ohne HDFS testen.
 
 Für den HDFS-Client gelten dieselben Variablen wie bei `test.sh`
-(`HADOOP_REPO`, `HADOOP_HOME`, `HADOOP_CONF_DIR`, `HDFS_JAVA_HOME`), siehe
-unten.
+(`HADOOP_REPO`, `HADOOP_VERSION`, `HADOOP_HOME`, `HADOOP_CONF_DIR`,
+`HDFS_JAVA_HOME`), siehe unten. `HADOOP_VERSION` gibt es auch als Option
+`--hadoop-version`.
 
 ### fsimage besorgen
 
@@ -219,7 +220,8 @@ dem Backup entspricht. Pfade, die seitdem jemand anders geändert hat, werden
 
 Gemeinsame Optionen: `--db` (`$HDFS_ACL_DB`, Default `./hdfs-acl.db`),
 `--base-dir` (`$BASE_DIR`), `--attr` (`$ACL_ATTR`), `--fsimage`
-(`$HDFS_FSIMAGE`), `--live`, `--parallel` (`$PARALLEL`, Default 8).
+(`$HDFS_FSIMAGE`), `--live`, `--parallel` (`$PARALLEL`, Default 8),
+`--hadoop-version` (`$HADOOP_VERSION`, Default 3.4.2).
 
 ### Viele Container
 
@@ -282,16 +284,17 @@ Basisordner und Attributname sind per Umgebungsvariable einstellbar:
 BASE_DIR=/acltest ACL_ATTR=user.rights ./test.sh --clean
 ```
 
-| Variable          | Default                                 |
-|-------------------|-----------------------------------------|
-| `BASE_DIR`        | `/fs`                                   |
-| `ACL_ATTR`        | `user.acl`                              |
-| `PARALLEL`        | `8` (parallele `setfattr`-Aufrufe)      |
-| `OUT_DIR`         | `hdfs/testdata`                         |
-| `HADOOP_REPO`     | `~/git/hadoop`                          |
-| `HADOOP_HOME`     | `$HADOOP_REPO/downloads/hadoop-3.4.2`   |
-| `HADOOP_CONF_DIR` | `$HADOOP_REPO/clientconfig`             |
-| `HDFS_JAVA_HOME`  | gesucht, siehe unten                    |
+| Variable          | Default                                         |
+|-------------------|-------------------------------------------------|
+| `BASE_DIR`        | `/fs`                                           |
+| `ACL_ATTR`        | `user.acl`                                      |
+| `PARALLEL`        | `8` (parallele `setfattr`-Aufrufe)              |
+| `OUT_DIR`         | `hdfs/testdata`                                 |
+| `HADOOP_REPO`     | `~/git/hadoop`                                  |
+| `HADOOP_VERSION`  | `3.4.2`                                         |
+| `HADOOP_HOME`     | `$HADOOP_REPO/downloads/hadoop-$HADOOP_VERSION` |
+| `HADOOP_CONF_DIR` | `$HADOOP_REPO/clientconfig`                     |
+| `HDFS_JAVA_HOME`  | gesucht, siehe unten                            |
 
 ### Java
 

@@ -44,7 +44,8 @@
 #   PARALLEL      parallele setfattr-Aufrufe (Default 8)
 #   OUT_DIR       Ziel der Vergleichsdateien (Default <skriptordner>/testdata)
 #   HADOOP_REPO   Checkout des Hadoop-Clusters (Default ~/git/hadoop)
-#   HADOOP_HOME   Hadoop-Client (Default $HADOOP_REPO/downloads/hadoop-3.4.2)
+#   HADOOP_VERSION   Version des Hadoop-Clients (Default 3.4.2)
+#   HADOOP_HOME   Hadoop-Client (Default $HADOOP_REPO/downloads/hadoop-$HADOOP_VERSION)
 #   HADOOP_CONF_DIR  Client-Konfiguration (Default $HADOOP_REPO/clientconfig)
 #   HDFS_JAVA_HOME   Java 11/17 für den Client. Ohne Angabe wird gesucht in
 #                    $HADOOP_REPO/downloads/jdk-11, sdkman (11*, 17*),
@@ -65,6 +66,7 @@ ACL_ATTR=${ACL_ATTR:-user.acl}
 PARALLEL=${PARALLEL:-8}
 OUT_DIR=${OUT_DIR:-$SCRIPT_DIR/testdata}
 HADOOP_REPO=${HADOOP_REPO:-$HOME/git/hadoop}
+HADOOP_VERSION=${HADOOP_VERSION:-3.4.2}
 
 ACLS_CSV=$OUT_DIR/acls.csv
 EXPECTED_CSV=$OUT_DIR/expected.csv
@@ -136,12 +138,12 @@ setup_hdfs() {
     fi
 
     export JAVA_HOME=$java_home
-    export HADOOP_HOME=${HADOOP_HOME:-$HADOOP_REPO/downloads/hadoop-3.4.2}
+    export HADOOP_HOME=${HADOOP_HOME:-$HADOOP_REPO/downloads/hadoop-$HADOOP_VERSION}
     export HADOOP_CONF_DIR=${HADOOP_CONF_DIR:-$HADOOP_REPO/clientconfig}
     export ACL_ATTR
 
     if [[ ! -x $HADOOP_HOME/bin/hdfs ]]; then
-        echo "Fehler: $HADOOP_HOME/bin/hdfs nicht gefunden (HADOOP_HOME setzen)." >&2
+        echo "Fehler: $HADOOP_HOME/bin/hdfs nicht gefunden (HADOOP_HOME oder HADOOP_VERSION setzen)." >&2
         exit 1
     fi
     echo "HDFS-Client: $HADOOP_HOME/bin/hdfs"

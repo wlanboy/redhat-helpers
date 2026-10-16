@@ -68,6 +68,9 @@ def build_parser() -> argparse.ArgumentParser:
     hdfs_opts.add_argument("--parallel", type=int, default=int(os.environ.get("PARALLEL", "8")),
                            help="parallele hdfs-Aufrufe beim Nachlesen/Schreiben "
                                 "(Default: $PARALLEL oder 8)")
+    hdfs_opts.add_argument("--hadoop-version", default=os.environ.get("HADOOP_VERSION", "3.4.2"),
+                           help="Hadoop-Client unter $HADOOP_REPO/downloads/hadoop-<version>, "
+                                "wenn HADOOP_HOME nicht gesetzt ist (Default: $HADOOP_VERSION oder 3.4.2)")
 
     write_opts = argparse.ArgumentParser(add_help=False)
     write_opts.add_argument("--apply", action="store_true", help="Änderungen wirklich schreiben")

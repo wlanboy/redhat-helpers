@@ -127,7 +127,7 @@ def execute(args: argparse.Namespace, hdfs: Hdfs, label: str, changes: list,
 
 
 def cmd_collect(args: argparse.Namespace) -> int:
-    refresh(args, Hdfs(args.parallel))
+    refresh(args, Hdfs(args.parallel, args.hadoop_version))
     con = sqlite3.connect(args.db)
     clients = con.execute("SELECT COUNT(DISTINCT clientid) FROM effective").fetchone()[0]
     print(f"{clients} clientids mit Rechten.")
@@ -224,7 +224,7 @@ def cmd_add(args: argparse.Namespace) -> int:
     source, new = client_id(args.source), client_id(args.new)
     if source == new:
         raise UsageError("QUELLE und NEU sind gleich.")
-    hdfs = Hdfs(args.parallel)
+    hdfs = Hdfs(args.parallel, args.hadoop_version)
     nodes, origin = refresh(args, hdfs)
     changes, _ = plan_add(nodes, source, new)
     nodes = recheck(args, hdfs, nodes, [c.path for c in changes])
@@ -239,7 +239,7 @@ def cmd_replace(args: argparse.Namespace) -> int:
     old, new = client_id(args.old), client_id(args.new)
     if old == new:
         raise UsageError("ALT und NEU sind gleich.")
-    hdfs = Hdfs(args.parallel)
+    hdfs = Hdfs(args.parallel, args.hadoop_version)
     nodes, origin = refresh(args, hdfs)
     nodes = recheck(args, hdfs, nodes, [c.path for c in plan_replace(nodes, old, new)])
     changes = plan_replace(nodes, old, new)
@@ -255,7 +255,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
     # neuer Besitzer darf auch User oder #gruppe sein, nur keine Trennzeichen
     if new_owner is not None and not re.fullmatch(r"[^\s|,=]+", new_owner):
         raise UsageError(f"Ungültiger Besitzer '{new_owner}'.")
-    hdfs = Hdfs(args.parallel)
+    hdfs = Hdfs(args.parallel, args.hadoop_version)
     nodes, origin = refresh(args, hdfs)
     changes, owned = plan_remove(nodes, clientid, new_owner)
     nodes = recheck(args, hdfs, nodes, [c.path for c in changes] + owned)
@@ -273,7 +273,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
 
 def cmd_restore(args: argparse.Namespace) -> int:
     backup = read_backup(args.backup)
-    hdfs = Hdfs(args.parallel)
+    hdfs = Hdfs(args.parallel, args.hadoop_version)
     nodes, origin = refresh(args, hdfs)
     # die Pfade des Backups immer live lesen: das fsimage kennt die
     # Änderungen, die zurückgedreht werden sollen, meist noch gar nicht
