@@ -12,6 +12,7 @@ from __future__ import annotations
 import base64
 import os
 import re
+import select
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
@@ -27,15 +28,26 @@ GLOB_BYTES = 100_000
 
 
 def _stop(proc: subprocess.Popen) -> Optional[int]:
-    """Beendet einen Prozess, dessen stdout nicht mehr gelesen wird (sonst
+    """Beendet einen Prozess, dessen Ausgabe nicht mehr gelesen wird (sonst
     blockiert er auf der vollen Pipe). Exit-Code, None wenn abgebrochen."""
     killed = proc.poll() is None
     if killed:
         proc.kill()
-    returncode = proc.wait()
-    if proc.stdout:
-        proc.stdout.close()
-    return None if killed else returncode
+    return None if killed else proc.wait()
+
+
+def _wait_for_writer(fd: int, proc: subprocess.Popen) -> bool:
+    """Wartet, bis der Prozess die Named Pipe fd öffnet, oder bis er sich
+    beendet (dann False). Solange niemand zum Schreiben geöffnet hat, meldet
+    poll() unter Linux nichts, ein read() aber sofort Dateiende."""
+    poller = select.poll()
+    poller.register(fd, select.POLLIN)
+    while True:
+        exited = proc.poll() is not None
+        if poller.poll(0 if exited else 500):
+            return True
+        if exited:
+            return False
 
 
 def java_major(home: Path) -> Optional[int]:
@@ -266,26 +278,37 @@ class Hdfs:
         """Wertet ein fsimage lokal mit "hdfs oiv -p XML" aus. Die XML-Ausgabe
         wird als Stream gelesen, es entsteht keine Zwischendatei."""
         info(f"Lese {attr} aus {image} (hdfs oiv) ...")
-        # stderr in eine Datei: eine zweite Pipe könnte volllaufen, während
-        # stdout gelesen wird, und oiv blockieren
-        with tempfile.TemporaryFile("w+") as err:
-            proc = subprocess.Popen([str(self.bin), "oiv", "-p", "XML", "-i", str(image), "-o", "-"],
-                                    env=self.env, stdout=subprocess.PIPE, stderr=err)
-            assert proc.stdout is not None  # stdout=PIPE
-            problem = None
+        # Das XML geht in eine Named Pipe statt nach stdout: je nach
+        # log4j-Konfiguration (fehlt z. B. in HADOOP_CONF_DIR) landen dort
+        # auch Logzeilen. stdout und stderr gehen in eine Datei, zwei Pipes
+        # könnten volllaufen, während die Named Pipe gelesen wird.
+        with tempfile.TemporaryDirectory() as tmp, tempfile.TemporaryFile("w+") as log:
+            fifo = Path(tmp) / "fsimage.xml"
+            os.mkfifo(fifo)
+            # O_NONBLOCK: sonst wartet open() auf oiv, auch wenn es nie schreibt
+            fd = os.open(fifo, os.O_RDONLY | os.O_NONBLOCK)
+            nodes, problem = None, None
             try:
-                nodes = parse_fsimage_xml(proc.stdout, base, attr, depth)
-            except ET.ParseError as error:
-                problem = error
+                proc = subprocess.Popen([str(self.bin), "oiv", "-p", "XML", "-i", str(image), "-o", str(fifo)],
+                                        env=self.env, stdout=log, stderr=log)
+                try:
+                    if _wait_for_writer(fd, proc):
+                        os.set_blocking(fd, True)
+                        with os.fdopen(fd, "rb", closefd=False) as stream:
+                            nodes = parse_fsimage_xml(stream, base, attr, depth)
+                except ET.ParseError as error:
+                    problem = f", Ausgabe nicht lesbar: {error}"
+                finally:
+                    # Der Parser hört nach <INodeDirectorySection> auf, oder
+                    # bricht ab; oiv kann dann noch laufen und muss nicht weiter
+                    returncode = _stop(proc)
             finally:
-                # Der Parser hört nach <INodeDirectorySection> auf, oder bricht
-                # ab; oiv kann dann noch laufen und braucht nicht weiterzulaufen
-                returncode = _stop(proc)
-            if problem:
-                err.seek(0)
-                lines = [line for line in err.read().splitlines() if "NativeCodeLoader" not in line]
+                os.close(fd)
+            if nodes is None:
+                log.seek(0)
+                lines = [line for line in log.read().splitlines() if "NativeCodeLoader" not in line]
                 code = f" (Exit-Code {returncode})" if returncode else ""
-                raise HdfsError(f"oiv {image} fehlgeschlagen{code}, Ausgabe nicht lesbar: {problem}"
+                raise HdfsError(f"oiv {image} fehlgeschlagen{code}{problem or ', keine Ausgabe'}"
                                 + "".join(f"\n{line}" for line in lines[-20:]))
         return nodes
 

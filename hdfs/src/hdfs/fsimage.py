@@ -30,8 +30,7 @@ from hdfs.common import UsageError
 ROOT_ID = 16385
 
 # Was oiv in den ausgewerteten Abschnitten auf Ebene 3 schreibt. Alles andere
-# ist fremder Text im Stream, z. B. "<init>" aus einem Java-Stacktrace auf
-# stdout. Der Parser selbst merkt das erst am Ende des Abschnitts (das neue
+# ist fremder Text im Stream, z. B. "<clinit>" aus einer Logzeile. Der Parser selbst merkt das erst am Ende des Abschnitts (das neue
 # Element wird nie geschlossen), mit einer nutzlosen Zeilennummer.
 ENTRIES = {
     "INodeSection": {"lastInodeId", "numInodes", "inode"},
@@ -147,7 +146,7 @@ def parse_fsimage_xml(stream: IO[bytes], base: str, attr: str, depth: int) -> di
         raise new from None
     if stray:
         tag, parent = stray
-        raise ET.ParseError(f"unerwartetes Element <{tag}> in <{parent}>, fremder Text auf stdout?\n"
+        raise ET.ParseError(f"unerwartetes Element <{tag}> in <{parent}>, fremder Text in der Ausgabe von oiv?\n"
                             + tail.find(f"<{tag}"))
 
     # Von der Wurzel zu base, dann Ebene für Ebene nach unten

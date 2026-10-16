@@ -90,18 +90,14 @@ hdfs-acl collect
   Nur für den lokalen Test (siehe unten).
 - Bricht `oiv` bei sehr großen Images mit `OutOfMemoryError` ab, hilft
   `export HADOOP_CLIENT_OPTS=-Xmx8g`.
-- **Ausgabe nicht lesbar** (`mismatched tag`, `unerwartetes Element`): Das
-  Tool liest die XML-Ausgabe von `oiv` über stdout. Schreibt dort noch etwas
-  anderes hinein, etwa Logzeilen oder ein Stacktrace (`<init>`), ist das XML
-  kaputt. Die Meldung zeigt die Zeilen um die Stelle. Typische Ursachen: Ein
-  `log4j.properties` in `$HADOOP_CONF_DIR` schickt den Console-Appender nach
-  `System.out` (Default von log4j, wenn `target` fehlt). Oder in
-  `HADOOP_CLIENT_OPTS`/`HADOOP_OPTS` ist GC-Logging aktiv (`-Xlog:gc`,
-  `-verbose:gc`). Nachstellen: `hdfs oiv -p XML -i fsimage_<txid> -o - > out.xml`.
-  Mit `-o out.xml` fällt der Fehler nicht auf, weil die Logs dann nicht in
-  der Datei landen. `oiv -p DetectCorruption` prüft nur den Namensraum,
-  nicht das XML. Abschnitte nach `<INodeDirectorySection>` liest das Tool
-  nicht mehr, Fehler dort stören also nicht.
+- `oiv` schreibt das XML in eine Named Pipe, nicht nach stdout. Logzeilen
+  von Hadoop (z. B. wenn `log4j.properties` in `$HADOOP_CONF_DIR` fehlt) oder
+  GC-Logging landen sonst mitten im XML. Abschnitte nach
+  `<INodeDirectorySection>` liest das Tool nicht. `oiv -p DetectCorruption`
+  prüft nur den Namensraum, nicht das XML. Meldet das Tool trotzdem
+  **Ausgabe nicht lesbar** (`mismatched tag`, `unerwartetes Element`), zeigt
+  es die Zeilen um die Stelle; nachstellen mit
+  `hdfs oiv -p XML -i fsimage_<txid> -o out.xml`.
 
 Anderer Ort: `--fsimage DATEI` oder `$HDFS_FSIMAGE`.
 
