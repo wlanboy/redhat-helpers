@@ -114,11 +114,18 @@ java_usable() {
 setup_hdfs() {
     local candidate java_home=""
     if [[ -n ${HDFS_JAVA_HOME:-} ]]; then
-        if ! java_usable "$HDFS_JAVA_HOME"; then
+        # auch .../bin/java oder .../bin angegeben? Dann das JDK darüber nehmen
+        java_home=${HDFS_JAVA_HOME%/}
+        java_home=${java_home%/bin/java}
+        java_home=${java_home%/bin}
+        if [[ ! -x $java_home/bin/java ]]; then
+            echo "Fehler: HDFS_JAVA_HOME=$HDFS_JAVA_HOME: kein $java_home/bin/java gefunden." >&2
+            exit 1
+        fi
+        if ! java_usable "$java_home"; then
             echo "Fehler: HDFS_JAVA_HOME=$HDFS_JAVA_HOME ist kein Java < 23." >&2
             exit 1
         fi
-        java_home=$HDFS_JAVA_HOME
     else
         for candidate in "$HADOOP_REPO/downloads/jdk-11" \
                          "$HOME"/.sdkman/candidates/java/11* \

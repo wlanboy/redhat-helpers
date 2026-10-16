@@ -50,8 +50,17 @@ def find_java(repo: Path) -> Path:
     explicit = os.environ.get("HDFS_JAVA_HOME")
     if explicit:
         home = Path(explicit).expanduser()
-        if (java_major(home) or 99) >= 23:
-            raise HdfsError(f"HDFS_JAVA_HOME={home} ist kein Java < 23.")
+        # auch .../bin/java oder .../bin angegeben? Dann das JDK darüber nehmen
+        if home.name == "java" and home.parent.name == "bin":
+            home = home.parent.parent
+        elif home.name == "bin":
+            home = home.parent
+        major = java_major(home)
+        if major is None:
+            raise HdfsError(f"HDFS_JAVA_HOME={explicit}: kein {home}/bin/java gefunden "
+                            "(Ordner des JDK angeben, ohne Wildcards).")
+        if major >= 23:
+            raise HdfsError(f"HDFS_JAVA_HOME={explicit} ist Java {major}, nötig ist Java < 23.")
         return home
     sdkman = Path.home() / ".sdkman" / "candidates" / "java"
     candidates = [repo / "downloads" / "jdk-11"]
