@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from hdfs.acl import Acl, split_token
+from hdfs.acl import OWNER_PERM, Acl, covers, split_token
 
 
 @dataclass
@@ -26,30 +26,34 @@ class Change:
     new: Optional[str]  # None = Attribut entfernen
 
 
-def merge_entries(tokens: list, principal: str, drop: bool) -> list:
-    """Fasst mehrere Einträge von principal zu einem mit dem höchsten Recht an der
-    ersten Stelle zusammen; drop=True entfernt sie (principal ist Besitzer).
+def merge_entries(tokens: list, principal: str, owner: bool) -> list:
+    """Fasst mehrere Einträge von principal zu einem an der ersten Stelle zusammen,
+    die Bits werden verodert. owner=True (principal ist Besitzer): Deckt
+    OWNER_PERM schon alles ab, entfallen die Einträge ganz.
 
-    Beispiel: ['@a=1', '#ops=3', '@a=3'] -> ['@a=3', '#ops=3']
+    Beispiel: ['@a=1', '#ops=3', '@a=4'] -> ['@a=5', '#ops=3']
     """
     perms = [perm for p, perm in map(split_token, tokens) if p == principal and perm is not None]
     if not perms:
         return tokens
+    mask = 0
+    for perm in perms:
+        mask |= perm
     merged = []
-    # placed: der zusammengefasste Eintrag steht schon in merged; bei drop=True
-    # wird so getan, als ob, damit alle Einträge von principal wegfallen
-    placed = drop
+    # placed: der zusammengefasste Eintrag steht schon in merged; wird er nicht
+    # gebraucht, wird so getan, als ob, damit alle Einträge von principal wegfallen
+    placed = owner and covers(OWNER_PERM, mask)
     for token in tokens:
         if split_token(token)[0] != principal:
             merged.append(token)
         elif not placed:
-            merged.append(f"{principal}={max(perms)}")
+            merged.append(f"{principal}={mask}")
             placed = True
     return merged
 
 
 def plan_add(nodes: dict, source: str, new: str) -> tuple:
-    """NEU bekommt überall mindestens die Rechte von QUELLE (Migration).
+    """NEU bekommt überall mindestens die Rechte (alle Bits) von QUELLE (Migration).
 
     Liefert (changes, found); found = Anzahl ACLs, in denen QUELLE vorkommt,
     damit der Aufrufer "QUELLE steht nirgends" von "schon alles erledigt"
@@ -68,10 +72,12 @@ def plan_add(nodes: dict, source: str, new: str) -> tuple:
         found += 1
         # effektives Recht verwenden: ist QUELLE Besitzer, bekommt NEU =3 als Eintrag
         perm = rights[source][0]
-        if rights.get(new, (0, False))[0] >= perm:
+        if covers(rights.get(new, (0, False))[0], perm):
             continue
-        # anhängen; vorhandene schwächere Einträge von NEU werden an ihrer Stelle hochgestuft
-        tokens = merge_entries(acl.tokens + [f"{new}={perm}"], new, drop=False)
+        # anhängen; vorhandene Einträge von NEU werden an ihrer Stelle um die
+        # fehlenden Bits ergänzt. Ist NEU Besitzer, bleibt der Eintrag trotzdem,
+        # denn er trägt Bits, die OWNER_PERM nicht hat.
+        tokens = merge_entries(acl.tokens + [f"{new}={perm}"], new, owner=False)
         changes.append(Change(path, raw, Acl(acl.owner, tokens).render()))
     return changes, found
 
@@ -87,12 +93,13 @@ def plan_replace(nodes: dict, old: str, new: str) -> list:
             continue
         owner = new if acl.owner == old else acl.owner
         # ALT an derselben Stelle in NEU umbenennen; hatte NEU schon einen Eintrag,
-        # bleibt einer mit dem höheren Recht, als Besitzer braucht NEU keinen
+        # bleibt einer mit den Bits beider, als Besitzer nur, wenn er mehr als
+        # OWNER_PERM trägt
         tokens = []
         for token in acl.tokens:
             principal, perm = split_token(token)
             tokens.append(f"{new}={perm}" if principal == old and perm is not None else token)
-        tokens = merge_entries(tokens, new, drop=owner == new)
+        tokens = merge_entries(tokens, new, owner=owner == new)
         changes.append(Change(path, raw, Acl(owner, tokens).render()))
     return changes
 
@@ -119,7 +126,7 @@ def plan_remove(nodes: dict, clientid: str, new_owner: Optional[str]) -> tuple:
         tokens = [t for t in acl.tokens if split_token(t)[0] != clientid]
         if owner != acl.owner:
             # z. B. nach add ALT NEU: NEU=3 ist als Besitzer überflüssig
-            tokens = merge_entries(tokens, owner, drop=True)
+            tokens = merge_entries(tokens, owner, owner=True)
         if owner != acl.owner or tokens != acl.tokens:
             changes.append(Change(path, raw, Acl(owner, tokens).render()))
     return changes, owned

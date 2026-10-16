@@ -9,8 +9,13 @@ Hilfsmittel rund um ACL-Metadaten (xattr `user.acl`) auf Ordnern im HDFS.
 ```
 
 - `besitzer` / `eintrag`: `@clientid`, User (ohne Präfix) oder `#gruppe`
-- `recht`: `3` = lesen + schreiben + löschen, `1` = nur lesen
-- Der Besitzer hat immer volle Rechte (3).
+- `recht`: Bitmaske aus der Security-ACL `PermissionFactory`, z. B.
+  `3` = lesen + schreiben + löschen, `1` = nur lesen. Erlaubt ist jede Maske
+  von 1 bis 2147483647 (Java-`int`), also auch weitere Bits wie `16`.
+- Steht eine clientid mehrfach in der ACL, gelten alle ihre Bits zusammen
+  (bitweises ODER): `@a=5,@a=16` ergibt `21`.
+- Der Besitzer hat immer mindestens `3`. Ist er zusätzlich gelistet, kommen
+  die Bits seiner Einträge dazu: Besitzer mit `=8` ergibt `11`.
 - Ausgewertet werden nur `@clientid`s, User und Gruppen werden ignoriert.
 - Ein Container ohne ACL erbt die ACL seines Accounts. Ein Container mit
   eigener ACL ersetzt die des Accounts komplett.
@@ -113,7 +118,8 @@ Ergebnis ist eine SQLite-Datei mit den Tabellen
 
 Die DB wird bei jedem `collect` komplett neu geschrieben, Abfragen gehen auch
 direkt mit `sqlite3 hdfs-acl.db`. ACLs mit Formatfehlern (kein `|`,
-Eintrag ohne `=<zahl>`, Recht nicht 1/3) meldet `collect` als Warnung.
+Eintrag ohne `=<zahl>`, Maske 0 oder größer als 2147483647) meldet `collect`
+als Warnung.
 
 ### Suchen
 
@@ -121,9 +127,10 @@ Eintrag ohne `=<zahl>`, Recht nicht 1/3) meldet `collect` als Warnung.
 hdfs-acl search @client3                 # alle Pfade mit Rechten, inkl. geerbter
 hdfs-acl search client3 --own           # nur aktiv gesetzte, mit Roh-ACL
 hdfs-acl search '@*' --own --format csv # alle aktiv gesetzten ACLs pro clientid
-hdfs-acl search '@client*' --perm 3     # Glob, nur Lesen+Schreiben+Löschen
+hdfs-acl search '@client*' --perm 3     # Glob, nur genau Maske 3
+hdfs-acl search '@*' --has-bits 16      # alle, deren Maske Bit 16 enthält
 hdfs-acl search @client3 --format csv   # oder json
-hdfs-acl clients                         # alle clientids mit Anzahl Pfade
+hdfs-acl clients                         # alle clientids mit Anzahl Pfade je Maske ("3:40 19:2")
 hdfs-acl show /fs/account3/container10   # ACL, Herkunft und Rechte eines Pfads
 hdfs-acl export -o export.csv            # Format wie testdata/expected.csv
 ```
@@ -165,8 +172,9 @@ hdfs-acl add @client3 @newapp --apply
 
 - Ist `@client3` Besitzer, wird `@newapp=3` als Eintrag ergänzt (der
   Besitzer bleibt einer).
-- Hat `@newapp` schon gleiche oder höhere Rechte, passiert nichts. Hat es
-  niedrigere, wird der Eintrag hochgestuft. Herabgestuft wird nie.
+- Hat `@newapp` schon alle Bits von `@client3`, passiert nichts. Fehlen
+  welche, werden sie im vorhandenen Eintrag ergänzt (`@newapp=4` und
+  `@client3=1` ergibt `@newapp=5`). Entfernt wird nie ein Bit.
 - Mehrfach ausführen ist unschädlich.
 
 ```bash
@@ -177,8 +185,9 @@ hdfs-acl replace @client3 @newapp --apply
 
 - Besitzer `@client3` wird Besitzer `@newapp`, Einträge `@client3=x` werden
   an derselben Stelle zu `@newapp=x`.
-- Hatte `@newapp` schon einen Eintrag, bleibt einer mit dem höheren Recht.
-  Ist `@newapp` danach Besitzer, entfallen seine Einträge (Besitzer hat 3).
+- Hatte `@newapp` schon einen Eintrag, bleibt einer mit den Bits beider.
+  Ist `@newapp` danach Besitzer, entfallen seine Einträge, sofern sie nicht
+  mehr als die `3` des Besitzers enthalten (`=16` bleibt also stehen).
 - `@newapp` hat danach überall genau die Rechte, die `@client3` hatte (plus
   seine eigenen), `@client3` nirgends mehr.
 
@@ -194,7 +203,7 @@ Pfade, an denen die clientid **Besitzer** ist, werden ohne `--new-owner`
 braucht. Bleibt nach dem Entfernen nur der Besitzer übrig, wird die ACL zu
 `<besitzer>|`. Bei einem Container bedeutet das weiterhin: Die Account-ACL
 gilt dort nicht. Mit `--new-owner` entfallen die Einträge des neuen
-Besitzers, weil er als Besitzer ohnehin 3 hat.
+Besitzers, wenn er als Besitzer ohnehin alle ihre Bits hat (Maske in `3`).
 
 Migration in zwei Schritten (erst ergänzen, Anwendung umstellen, dann
 aufräumen):
@@ -341,4 +350,5 @@ immer identisch.
 | c%5=2                | `cl(n+5)\|#readers=1,cl(n+5)=1,cl(n)=1`           | Besitzer zusätzlich `=1` → bleibt 3  |
 | c%5=3                | `maria\|cl(n+6)=3,cl(n+7)=1,#ops=1`               | Clients nur über Einträge            |
 | c%5=4                | `#admins\|peter=3,#ops=1`                         | keine Client-ID → niemand            |
+| `container48`        | `cl(n+9)\|cl(n+1)=5,#ops=16,cl(n+1)=16,cl(n+9)=8` | Masken > 3: ODER (21), Besitzer 3\|8=11 |
 | `container49`        | `cl(n+8)\|`                                       | nur Besitzer, keine Einträge         |

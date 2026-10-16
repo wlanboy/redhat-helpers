@@ -15,7 +15,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from hdfs.acl import Acl, acl_problems, principal_kind, resolve_acl_from, split_token
+from hdfs.acl import OWNER_PERM, Acl, acl_problems, principal_kind, resolve_acl_from, split_token
 from hdfs.changes import Change
 from hdfs.common import UsageError, info
 
@@ -82,8 +82,8 @@ def save(db: Path, base: str, attr: str, depth: int, origin: str, nodes: dict) -
         if raw is not None:
             acl = Acl.parse(raw)
             if acl.owner:
-                con.execute("INSERT INTO entry VALUES (?, ?, ?, 3, 1)",
-                            (path, acl.owner, principal_kind(acl.owner)))
+                con.execute("INSERT INTO entry VALUES (?, ?, ?, ?, 1)",
+                            (path, acl.owner, principal_kind(acl.owner), OWNER_PERM))
             for token in acl.tokens:
                 principal, perm = split_token(token)
                 if perm is not None:

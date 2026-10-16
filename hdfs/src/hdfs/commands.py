@@ -17,7 +17,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 
-from hdfs.acl import client_id
+from hdfs.acl import client_id, covers
 from hdfs.changes import plan_add, plan_remove, plan_replace, plan_restore
 from hdfs.common import HdfsError, UsageError, info, natural_key
 from hdfs.fsimage import find_fsimage
@@ -142,19 +142,27 @@ def cmd_search(args: argparse.Namespace) -> int:
     con = open_db(Path(args.db))
     if args.own:
         # nur aktiv gesetzte Einträge, letzte Spalte ist die Roh-ACL des Pfads;
-        # GROUP BY/MAX fasst Besitzer + zusätzlichen Eintrag zu einer Zeile zusammen
+        # Besitzer + zusätzliche Einträge werden zu einer Zeile verodert (SQLite
+        # hat kein bitweises OR als Aggregat)
         columns = ["path", "clientid", "perm", "owner", "acl"]
-        sql = """SELECT e.path, e.principal, MAX(e.perm), MAX(e.owner), n.acl
-                 FROM entry e JOIN node n ON n.path = e.path
-                 WHERE e.kind = 'client' AND e.principal GLOB ?
-                 GROUP BY e.path, e.principal"""
+        merged = {}
+        for path, clientid, perm, owner, acl in con.execute(
+                """SELECT e.path, e.principal, e.perm, e.owner, n.acl
+                   FROM entry e JOIN node n ON n.path = e.path
+                   WHERE e.kind = 'client' AND e.principal GLOB ?""", (pattern,)):
+            old_perm, old_owner, _ = merged.get((path, clientid), (0, 0, acl))
+            merged[(path, clientid)] = (old_perm | perm, old_owner | owner, acl)
+        found = [(path, clientid, *rest) for (path, clientid), rest in merged.items()]
     else:
         columns = ["path", "clientid", "perm", "owner", "acl_from"]
-        sql = "SELECT path, clientid, perm, owner, acl_from FROM effective WHERE clientid GLOB ?"
+        found = con.execute(
+            "SELECT path, clientid, perm, owner, acl_from FROM effective WHERE clientid GLOB ?",
+            (pattern,))
     rows = [
         (path, clientid, perm, bool(owner), last)
-        for path, clientid, perm, owner, last in con.execute(sql, (pattern,))
-        if args.perm is None or perm == args.perm
+        for path, clientid, perm, owner, last in found
+        if (args.perm is None or perm == args.perm)
+        and (args.has_bits is None or covers(perm, args.has_bits))
     ]
     rows.sort(key=lambda r: (natural_key(r[1]), natural_key(r[0])))
     output(columns, rows, args.format)
@@ -167,14 +175,18 @@ def cmd_clients(args: argparse.Namespace) -> int:
     # own_acls: an wie vielen Pfaden die clientid selbst eingetragen ist (ohne Vererbung)
     own = dict(con.execute(
         "SELECT principal, COUNT(DISTINCT path) FROM entry WHERE kind = 'client' GROUP BY principal"))
+    # perms: wie oft welche Maske vorkommt, z. B. "1:12 3:40 19:2"
+    perms = {}
+    for clientid, perm, count in con.execute(
+            "SELECT clientid, perm, COUNT(*) FROM effective GROUP BY clientid, perm ORDER BY perm"):
+        perms.setdefault(clientid, []).append(f"{perm}:{count}")
     rows = [
-        (clientid, paths, perm3, perm1, owner, own.get(clientid, 0))
-        for clientid, paths, perm3, perm1, owner in con.execute(
-            """SELECT clientid, COUNT(*), SUM(perm = 3), SUM(perm = 1), SUM(owner)
-               FROM effective GROUP BY clientid""")
+        (clientid, paths, " ".join(perms[clientid]), owner, own.get(clientid, 0))
+        for clientid, paths, owner in con.execute(
+            "SELECT clientid, COUNT(*), SUM(owner) FROM effective GROUP BY clientid")
     ]
     rows.sort(key=lambda r: natural_key(r[0]))
-    output(["clientid", "paths", "perm3", "perm1", "owner", "own_acls"], rows, args.format)
+    output(["clientid", "paths", "perms", "owner", "own_acls"], rows, args.format)
     return 0
 
 

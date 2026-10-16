@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """ACL-Metadaten (xattr user.acl) in HDFS einsammeln, durchsuchen und ändern.
 
-ACL-Format: <besitzer>|<eintrag>=<recht>,...  (Details in hdfs.md)
+ACL-Format: <besitzer>|<eintrag>=<recht>,...  (recht = Bitmaske, Details in hdfs.md)
 
 Kommandos:
   collect             ACLs aus dem fsimage (oder live) lesen und in SQLite speichern
@@ -89,7 +89,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("search", parents=[db_opts, fmt_opts], help="nach clientid suchen")
     p.add_argument("clientid", help="z. B. @client3 oder '@client*' (Glob)")
     p.add_argument("--own", action="store_true", help="nur eigene Einträge, ohne Vererbung")
-    p.add_argument("--perm", type=int, choices=[1, 3], help="nur dieses Recht")
+    p.add_argument("--perm", type=int, metavar="MASKE", help="nur genau diese Maske, z. B. 3")
+    p.add_argument("--has-bits", type=int, metavar="MASKE",
+                   help="nur Rechte, die alle Bits von MASKE enthalten, z. B. 16")
     p.set_defaults(func=cmd_search)
 
     p = sub.add_parser("clients", parents=[db_opts, fmt_opts], help="alle clientids auflisten")

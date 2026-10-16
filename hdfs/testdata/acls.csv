@@ -47,7 +47,7 @@ path;acl
 /fs/account1/container45;
 /fs/account1/container46;@client1|@client4=3,dev_user=3,@client5=1
 /fs/account1/container47;@client6|#readers=1,@client6=1,@client1=1
-/fs/account1/container48;maria|@client7=3,@client8=1,#ops=1
+/fs/account1/container48;@client10|@client2=5,#ops=16,@client2=16,@client10=8
 /fs/account1/container49;@client9|
 /fs/account1/container50;
 /fs/account2;@client2|@client3=3,svc_backup=1,@client4=1,#ops=3
@@ -98,7 +98,7 @@ path;acl
 /fs/account2/container45;
 /fs/account2/container46;@client2|@client5=3,dev_user=3,@client6=1
 /fs/account2/container47;@client7|#readers=1,@client7=1,@client2=1
-/fs/account2/container48;maria|@client8=3,@client9=1,#ops=1
+/fs/account2/container48;@client1|@client3=5,#ops=16,@client3=16,@client1=8
 /fs/account2/container49;@client10|
 /fs/account2/container50;
 /fs/account3;hans|@client4=3,svc_backup=1,@client5=1,#ops=3
@@ -149,7 +149,7 @@ path;acl
 /fs/account3/container45;
 /fs/account3/container46;@client3|@client6=3,dev_user=3,@client7=1
 /fs/account3/container47;@client8|#readers=1,@client8=1,@client3=1
-/fs/account3/container48;maria|@client9=3,@client10=1,#ops=1
+/fs/account3/container48;@client2|@client4=5,#ops=16,@client4=16,@client2=8
 /fs/account3/container49;@client1|
 /fs/account3/container50;
 /fs/account4;@client4|@client5=3,svc_backup=1,@client6=1,#ops=3
@@ -200,7 +200,7 @@ path;acl
 /fs/account4/container45;
 /fs/account4/container46;@client4|@client7=3,dev_user=3,@client8=1
 /fs/account4/container47;@client9|#readers=1,@client9=1,@client4=1
-/fs/account4/container48;maria|@client10=3,@client1=1,#ops=1
+/fs/account4/container48;@client3|@client5=5,#ops=16,@client5=16,@client3=8
 /fs/account4/container49;@client2|
 /fs/account4/container50;
 /fs/account5;@client5|@client6=3,svc_backup=1,@client7=1,#ops=3
@@ -251,7 +251,7 @@ path;acl
 /fs/account5/container45;
 /fs/account5/container46;@client5|@client8=3,dev_user=3,@client9=1
 /fs/account5/container47;@client10|#readers=1,@client10=1,@client5=1
-/fs/account5/container48;maria|@client1=3,@client2=1,#ops=1
+/fs/account5/container48;@client4|@client6=5,#ops=16,@client6=16,@client4=8
 /fs/account5/container49;@client3|
 /fs/account5/container50;
 /fs/account6;@client6|@client7=3,svc_backup=1,@client8=1,#ops=3
@@ -302,7 +302,7 @@ path;acl
 /fs/account6/container45;
 /fs/account6/container46;@client6|@client9=3,dev_user=3,@client10=1
 /fs/account6/container47;@client1|#readers=1,@client1=1,@client6=1
-/fs/account6/container48;maria|@client2=3,@client3=1,#ops=1
+/fs/account6/container48;@client5|@client7=5,#ops=16,@client7=16,@client5=8
 /fs/account6/container49;@client4|
 /fs/account6/container50;
 /fs/account7;#admins|@client8=3,svc_backup=1,@client9=1,#ops=3
@@ -353,7 +353,7 @@ path;acl
 /fs/account7/container45;
 /fs/account7/container46;@client7|@client10=3,dev_user=3,@client1=1
 /fs/account7/container47;@client2|#readers=1,@client2=1,@client7=1
-/fs/account7/container48;maria|@client3=3,@client4=1,#ops=1
+/fs/account7/container48;@client6|@client8=5,#ops=16,@client8=16,@client6=8
 /fs/account7/container49;@client5|
 /fs/account7/container50;
 /fs/account8;@client8|@client9=3,svc_backup=1,@client10=1,#ops=3
@@ -404,7 +404,7 @@ path;acl
 /fs/account8/container45;
 /fs/account8/container46;@client8|@client1=3,dev_user=3,@client2=1
 /fs/account8/container47;@client3|#readers=1,@client3=1,@client8=1
-/fs/account8/container48;maria|@client4=3,@client5=1,#ops=1
+/fs/account8/container48;@client7|@client9=5,#ops=16,@client9=16,@client7=8
 /fs/account8/container49;@client6|
 /fs/account8/container50;
 /fs/account9;@client9|@client10=3,svc_backup=1,@client1=1,#ops=3
@@ -455,7 +455,7 @@ path;acl
 /fs/account9/container45;
 /fs/account9/container46;@client9|@client2=3,dev_user=3,@client3=1
 /fs/account9/container47;@client4|#readers=1,@client4=1,@client9=1
-/fs/account9/container48;maria|@client5=3,@client6=1,#ops=1
+/fs/account9/container48;@client8|@client10=5,#ops=16,@client10=16,@client8=8
 /fs/account9/container49;@client7|
 /fs/account9/container50;
 /fs/account10;
@@ -506,6 +506,6 @@ path;acl
 /fs/account10/container45;
 /fs/account10/container46;@client10|@client3=3,dev_user=3,@client4=1
 /fs/account10/container47;@client5|#readers=1,@client5=1,@client10=1
-/fs/account10/container48;maria|@client6=3,@client7=1,#ops=1
+/fs/account10/container48;@client9|@client1=5,#ops=16,@client1=16,@client9=8
 /fs/account10/container49;@client8|
 /fs/account10/container50;

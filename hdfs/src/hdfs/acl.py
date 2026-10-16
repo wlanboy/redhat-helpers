@@ -2,7 +2,8 @@
 
 Format: <besitzer>|<eintrag>=<recht>,<eintrag>=<recht>,...
   besitzer/eintrag: @clientid, user (ohne Präfix) oder #gruppe
-  recht: 3 = lesen+schreiben+löschen, 1 = nur lesen; der Besitzer hat immer 3
+  recht: Bitmaske aus der Spring-Security-ACL PermissionFactory, z. B.
+         1 = nur lesen, 3 = lesen+schreiben+löschen; der Besitzer hat immer 3
 
 Dieses Modul kennt kein HDFS und keine Datenbank, es arbeitet nur auf Strings.
 """
@@ -15,6 +16,11 @@ from dataclasses import dataclass
 from typing import Optional
 
 from hdfs.common import UsageError
+
+# Recht des Besitzers, auch wenn er gar nicht oder schwächer gelistet ist
+OWNER_PERM = 3
+# Spring speichert die Maske als Java-int, höchstes nutzbares Bit ist 1 << 30
+MAX_PERM = (1 << 31) - 1
 
 
 def principal_kind(principal: str) -> str:
@@ -54,16 +60,15 @@ class Acl:
     def client_rights(self) -> dict:
         """Effektive Rechte der @clientids: {clientid: (recht, ist_besitzer)}."""
         rights = {}
-        # Steht eine clientid mehrfach in der ACL, zählt das höchste Recht
+        # Steht eine clientid mehrfach in der ACL, gelten alle ihre Bits zusammen
         for token in self.tokens:
             principal, perm = split_token(token)
             if perm is not None and principal.startswith("@"):
-                if perm > rights.get(principal, (0, False))[0]:
-                    rights[principal] = (perm, False)
-        # Der Besitzer hat immer 3, auch wenn er zusätzlich mit =1 gelistet ist.
-        # Deshalb wird er erst nach den Einträgen gesetzt und überschreibt sie.
+                rights[principal] = (rights.get(principal, (0, False))[0] | perm, False)
+        # Der Besitzer hat immer mindestens OWNER_PERM, auch wenn er zusätzlich
+        # mit =1 gelistet ist; weitere Bits aus seinen Einträgen kommen dazu
         if self.owner.startswith("@"):
-            rights[self.owner] = (3, True)
+            rights[self.owner] = (rights.get(self.owner, (0, False))[0] | OWNER_PERM, True)
         return rights
 
 
@@ -81,9 +86,14 @@ def acl_problems(raw: str) -> list:
         perm = split_token(token)[1]
         if perm is None:
             problems.append(f"ungültiger Eintrag '{token}'")
-        elif perm not in (1, 3):
-            problems.append(f"unbekanntes Recht in '{token}'")
+        elif not 0 < perm <= MAX_PERM:
+            problems.append(f"Recht außerhalb 1..{MAX_PERM} in '{token}'")
     return problems
+
+
+def covers(have: int, need: int) -> bool:
+    """True, wenn die Maske have alle Bits von need enthält."""
+    return have & need == need
 
 
 def resolve_acl_from(nodes: dict) -> dict:
