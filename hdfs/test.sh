@@ -15,7 +15,8 @@
 #     mit acls.csv
 #
 # ACL-Format: <besitzer>|<eintrag>=<recht>,<eintrag>=<recht>,...
-#   besitzer/eintrag: @clientid, user (ohne Präfix) oder #gruppe
+#   besitzer/eintrag: @clientid, user (ohne Präfix) oder #gruppe;
+#   LDAP-Teile (cn=..., ou=..., dc=..., sn=...) werden ignoriert
 #   recht: Bitmaske (Spring Security ACL PermissionFactory), z. B.
 #          3 = lesen+schreiben+löschen, 1 = nur lesen
 #   Der Besitzer hat immer mindestens 3, mehrere Einträge einer clientid
@@ -33,8 +34,10 @@
 #                        (Besitzer zusätzlich mit =1 gelistet, bleibt 3)
 #                c%5==3  maria|cl(n+6)=3,cl(n+7)=1,#ops=1
 #                c%5==4  #admins|peter=3,#ops=1  (keine @clientid -> niemand)
-#                c==48   cl(n+9)|cl(n+1)=5,#ops=16,cl(n+1)=16,cl(n+9)=8
-#                        (Masken > 3: cl(n+1) 5|16=21, Besitzer 3|8=11)
+#                c==48   cl(n+9)|cl(n+1)=5,#ops=16,cl(n+1)=16,cl(n+9)=8,
+#                                cn=doc,ou=hell,dc=firma=3,cn=testgroup
+#                        (Masken > 3: cl(n+1) 5|16=21, Besitzer 3|8=11;
+#                        LDAP-Teile ohne Warnung ignoriert)
 #                c==49   cl(n+8)|  (nur Besitzer, keine Einträge)
 #
 # Optionen:
@@ -198,7 +201,8 @@ acl_container() {
     HAS_ACL=1
     if (( c == 48 )); then
         OWNER=$(cl $((n + 9)))
-        ENTRIES=("$(cl $((n + 1)))=5" "#ops=16" "$(cl $((n + 1)))=16" "$(cl $((n + 9)))=8")
+        ENTRIES=("$(cl $((n + 1)))=5" "#ops=16" "$(cl $((n + 1)))=16" "$(cl $((n + 9)))=8"
+                 "cn=doc" "ou=hell" "dc=firma=3" "cn=testgroup")
         return
     fi
     if (( c == 49 )); then

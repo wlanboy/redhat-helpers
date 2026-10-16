@@ -9,6 +9,12 @@ Hilfsmittel rund um ACL-Metadaten (xattr `user.acl`) auf Ordnern im HDFS.
 ```
 
 - `besitzer` / `eintrag`: `@clientid`, User (ohne Präfix) oder `#gruppe`
+- Einträge aus LDAP werden ignoriert: Ein DN wie `cn=doc,ou=hell,dc=firma=3`
+  zerfällt am `,` in `cn=doc`, `ou=hell`, `dc=firma=3`. Erkannt werden Teile,
+  die mit `cn=`, `ou=`, `dc=`, `o=`, `c=`, `l=`, `st=`, `street=`, `uid=` oder `sn=`
+  beginnen (Groß-/Kleinschreibung egal, optional mit `.` davor), gefolgt von
+  einem Wert, der nicht nur aus Ziffern besteht. Sie geben keine Warnung,
+  stehen nicht in `entry` und bleiben beim Ändern Wort für Wort erhalten.
 - `recht`: Bitmaske aus der Security-ACL `PermissionFactory`, z. B.
   `3` = lesen + schreiben + löschen, `1` = nur lesen. Erlaubt ist jede Maske
   von 1 bis 2147483647 (Java-`int`), also auch weitere Bits wie `16`.
@@ -112,7 +118,7 @@ Ergebnis ist eine SQLite-Datei mit den Tabellen
 | Tabelle     | Inhalt                                                          |
 |-------------|-----------------------------------------------------------------|
 | `node`      | jeder Pfad mit Roh-ACL, `acl_from` (wessen ACL gilt), Warnungen |
-| `entry`     | nur **aktiv gesetzte** Einträge aller Arten (client/user/group) inkl. Besitzer |
+| `entry`     | nur **aktiv gesetzte** Einträge (client/user/group, ohne LDAP) inkl. Besitzer |
 | `effective` | effektives Recht je `@clientid` und Pfad, Vererbung aufgelöst (berechnet) |
 | `meta`      | Basisordner, Attribut, Zeitpunkt und Quelle (fsimage/live)      |
 
@@ -350,5 +356,5 @@ immer identisch.
 | c%5=2                | `cl(n+5)\|#readers=1,cl(n+5)=1,cl(n)=1`           | Besitzer zusätzlich `=1` → bleibt 3  |
 | c%5=3                | `maria\|cl(n+6)=3,cl(n+7)=1,#ops=1`               | Clients nur über Einträge            |
 | c%5=4                | `#admins\|peter=3,#ops=1`                         | keine Client-ID → niemand            |
-| `container48`        | `cl(n+9)\|cl(n+1)=5,#ops=16,cl(n+1)=16,cl(n+9)=8` | Masken > 3: ODER (21), Besitzer 3\|8=11 |
+| `container48`        | `cl(n+9)\|cl(n+1)=5,#ops=16,cl(n+1)=16,cl(n+9)=8,cn=doc,ou=hell,dc=firma=3,cn=testgroup` | Masken > 3: ODER (21), Besitzer 3\|8=11; LDAP ignoriert |
 | `container49`        | `cl(n+8)\|`                                       | nur Besitzer, keine Einträge         |

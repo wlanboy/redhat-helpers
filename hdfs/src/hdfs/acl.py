@@ -2,6 +2,7 @@
 
 Format: <besitzer>|<eintrag>=<recht>,<eintrag>=<recht>,...
   besitzer/eintrag: @clientid, user (ohne Präfix) oder #gruppe
+  LDAP-Teile wie cn=doc, ou=hell, sn=meier oder dc=firma=3 werden ignoriert
   recht: Bitmaske aus der Spring-Security-ACL PermissionFactory, z. B.
          1 = nur lesen, 3 = lesen+schreiben+löschen; der Besitzer hat immer 3
 
@@ -22,9 +23,21 @@ OWNER_PERM = 3
 # Spring speichert die Maske als Java-int, höchstes nutzbares Bit ist 1 << 30
 MAX_PERM = (1 << 31) - 1
 
+# Teil eines LDAP-DN: Attributtyp aus RFC 4514, '=', dann ein Wert, der nicht
+# nur aus Ziffern besteht (sonst wäre "cn=3" ein User "cn" mit Recht 3).
+# Ein DN zerfällt am ',' in mehrere Einträge, der letzte trägt evtl. "=<recht>".
+LDAP_PART = re.compile(r"\.?(?:cn|ou|dc|o|c|l|st|street|uid|sn)=(?!\d*$)", re.IGNORECASE)
+
+
+def is_ldap(token: str) -> bool:
+    """True für LDAP-Teile wie 'cn=doc', 'ou=hell' oder 'dc=firma=3'."""
+    return LDAP_PART.match(token) is not None
+
 
 def principal_kind(principal: str) -> str:
-    """Art eines Eintrags anhand des Präfixes: @ = client, # = group, sonst user."""
+    """Art eines Eintrags: @ = client, # = group, LDAP-DN = ldap, sonst user."""
+    if is_ldap(principal):
+        return "ldap"
     if principal.startswith("@"):
         return "client"
     if principal.startswith("#"):
@@ -81,7 +94,7 @@ def acl_problems(raw: str) -> list:
     if not owner.strip():
         problems.append("kein Besitzer")
     for token in (t.strip() for t in rest.split(",")):
-        if not token:
+        if not token or is_ldap(token):
             continue
         perm = split_token(token)[1]
         if perm is None:

@@ -15,7 +15,9 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from hdfs.acl import OWNER_PERM, Acl, acl_problems, principal_kind, resolve_acl_from, split_token
+from hdfs.acl import (
+    OWNER_PERM, Acl, acl_problems, is_ldap, principal_kind, resolve_acl_from, split_token,
+)
 from hdfs.changes import Change
 from hdfs.common import UsageError, info
 
@@ -34,7 +36,7 @@ CREATE TABLE node (
     acl_from TEXT,
     problems TEXT
 );
--- eigene ACL-Einträge aller Arten (client/user/group), Besitzer mit owner = 1
+-- eigene ACL-Einträge (client/user/group, ohne LDAP), Besitzer mit owner = 1
 CREATE TABLE entry (
     path      TEXT NOT NULL,
     principal TEXT NOT NULL,
@@ -81,12 +83,12 @@ def save(db: Path, base: str, attr: str, depth: int, origin: str, nodes: dict) -
         # entry: was wirklich an diesem Pfad steht (ohne Vererbung)
         if raw is not None:
             acl = Acl.parse(raw)
-            if acl.owner:
+            if acl.owner and not is_ldap(acl.owner):
                 con.execute("INSERT INTO entry VALUES (?, ?, ?, ?, 1)",
                             (path, acl.owner, principal_kind(acl.owner), OWNER_PERM))
             for token in acl.tokens:
                 principal, perm = split_token(token)
-                if perm is not None:
+                if perm is not None and not is_ldap(token):
                     con.execute("INSERT INTO entry VALUES (?, ?, ?, ?, 0)",
                                 (path, principal, principal_kind(principal), perm))
         # effective: was an diesem Pfad gilt, also die Rechte der ACL von acl_from
