@@ -2,9 +2,10 @@
 
 Lesende Kommandos (search, clients, show, export) arbeiten nur auf der DB.
 Ändernde Kommandos (add, replace, remove, restore) laufen alle gleich ab:
-    1. refresh():  HDFS frisch einlesen, DB neu schreiben
+    1. refresh():  Stand einlesen (fsimage oder live), DB neu schreiben
     2. plan_*():   Liste Change berechnen (changes.py)
-    3. execute():  Plan zeigen, mit --apply Backup + schreiben + nachprüfen
+    3. recheck():  die betroffenen Pfade live nachlesen, dann neu planen
+    4. execute():  Plan zeigen, mit --apply Backup + schreiben + nachprüfen
 """
 
 from __future__ import annotations
@@ -13,11 +14,13 @@ import argparse
 import re
 import sqlite3
 import sys
+from datetime import datetime
 from pathlib import Path
 
 from hdfs.acl import client_id
 from hdfs.changes import plan_add, plan_remove, plan_replace, plan_restore
 from hdfs.common import HdfsError, UsageError, info, natural_key
+from hdfs.fsimage import find_fsimage
 from hdfs.hdfs_client import Hdfs
 from hdfs.output import output
 from hdfs.store import open_db, read_backup, save, write_backup
@@ -30,29 +33,59 @@ def base_dir(value: str) -> str:
     return value
 
 
-def refresh(args: argparse.Namespace, hdfs: Hdfs) -> dict:
-    """HDFS einlesen und die DB neu schreiben; liefert {pfad: roh_acl oder None}.
+def refresh(args: argparse.Namespace, hdfs: Hdfs) -> tuple:
+    """Stand einlesen und die DB neu schreiben; liefert ({pfad: roh_acl oder None}, quelle).
 
-    Ändernde Kommandos planen immer auf diesem frischen Stand, nie auf einer
-    alten DB, damit keine zwischenzeitlichen Änderungen überschrieben werden.
+    Standard ist das fsimage neben der DB: kein Zugriff auf den NameNode, aber
+    so alt wie der Checkpoint. Mit --live wird HDFS direkt gelesen.
     """
     base = base_dir(args.base_dir)
-    nodes = hdfs.read_acls(base, args.attr, args.depth)
+    if args.live:
+        nodes = hdfs.read_acls(base, args.attr, args.depth)
+        source = "live"
+    else:
+        image = Path(args.fsimage) if args.fsimage else find_fsimage(Path(args.db).resolve().parent)
+        nodes = hdfs.read_fsimage(image, base, args.attr, args.depth)
+        stamp = datetime.fromtimestamp(image.stat().st_mtime).isoformat(timespec="seconds")
+        source = f"{image.name} (Datei vom {stamp})"
     if not nodes:
         raise HdfsError(f"Unter {base} wurden keine Pfade gefunden.")
-    save(Path(args.db), base, args.attr, args.depth, nodes)
+    save(Path(args.db), base, args.attr, args.depth, source, nodes)
     with_acl = sum(raw is not None for raw in nodes.values())
-    info(f"{len(nodes)} Pfade, {with_acl} mit {args.attr}, gespeichert in {args.db}")
+    info(f"{len(nodes)} Pfade, {with_acl} mit {args.attr}, aus {source} gespeichert in {args.db}")
+    return nodes, source
+
+
+def recheck(args: argparse.Namespace, hdfs: Hdfs, nodes: dict, paths: list) -> dict:
+    """Liest die betroffenen Pfade live nach und übernimmt ihre aktuellen Werte.
+
+    Der eingelesene Stand (vor allem das fsimage) kann veraltet sein. Geplant
+    wird deshalb ein zweites Mal auf den aktuellen Werten der Pfade, die der
+    erste Plan ändern würde. Das kostet nur einen Lesezugriff je betroffenem
+    Pfad. Pfade, die erst seit dem Einlesen betroffen sind, fehlen weiterhin.
+    """
+    if not paths:
+        return nodes
+    live = hdfs.read_paths(paths, args.attr)
+    changed = sum(path in live and live[path] != nodes.get(path) for path in paths)
+    for path in paths:
+        if path in live:
+            nodes[path] = live[path]
+        else:
+            nodes.pop(path, None)  # gelöscht oder nicht lesbar: nicht anfassen
+    info(f"{len(paths)} betroffene Pfade live nachgelesen: {changed} seitdem geändert, "
+         f"{len(paths) - len(live)} fehlen")
     return nodes
 
 
-def execute(args: argparse.Namespace, hdfs: Hdfs, label: str, changes: list) -> int:
+def execute(args: argparse.Namespace, hdfs: Hdfs, label: str, changes: list,
+            nodes: dict, source: str) -> int:
     """Gemeinsamer Ablauf aller ändernden Kommandos.
 
     Ohne --apply endet er nach der Anzeige (Dry-Run). Mit --apply:
-    Backup schreiben, dann HDFS ändern, dann HDFS neu einlesen und jeden
-    Pfad mit dem geplanten Wert vergleichen. Exit-Code 1, wenn ein Aufruf
-    fehlschlug oder ein Wert nicht stimmt.
+    Backup schreiben, dann HDFS ändern, dann die geänderten Pfade neu lesen
+    und mit dem geplanten Wert vergleichen. Die DB bekommt die gelesenen Werte.
+    Exit-Code 1, wenn ein Aufruf fehlschlug oder ein Wert nicht stimmt.
     """
     changes.sort(key=lambda c: natural_key(c.path))
     for change in changes:
@@ -71,17 +104,20 @@ def execute(args: argparse.Namespace, hdfs: Hdfs, label: str, changes: list) -> 
     # mit restore zurückgedreht werden kann
     backup = write_backup(Path(args.db), label, changes)
     print(f"Backup: {backup}  (zurückdrehen mit: restore {backup})")
-    failures = hdfs.write(changes, args.attr)
-    for change, error in failures:
-        print(f"Fehler: {change.path}: {error}", file=sys.stderr)
+    errors = hdfs.write(changes, args.attr)
+    for error in errors:
+        print(f"Fehler: {error}", file=sys.stderr)
 
     # Nachprüfen: der Exit-Code von setfattr allein reicht nicht, gelesen wird
-    # der tatsächliche Wert. Nebenbei ist die DB danach wieder aktuell.
-    nodes = refresh(args, hdfs)
-    mismatches = [c for c in changes if nodes.get(c.path) != c.new]
+    # der tatsächliche Wert. Nebenbei kommt die DB auf den neuen Stand.
+    live = hdfs.read_paths([c.path for c in changes], args.attr)
+    mismatches = [c for c in changes if c.path not in live or live[c.path] != c.new]
     for change in mismatches:
-        print(f"Fehler: {change.path} hat nach dem Schreiben {nodes.get(change.path)!r}", file=sys.stderr)
-    if failures or mismatches:
+        actual = repr(live[change.path]) if change.path in live else "(nicht lesbar)"
+        print(f"Fehler: {change.path} hat nach dem Schreiben {actual}", file=sys.stderr)
+    nodes.update(live)
+    save(Path(args.db), base_dir(args.base_dir), args.attr, args.depth, f"{source} + {label}", nodes)
+    if errors or mismatches:
         return 1
     print(f"OK: {len(changes)} Pfade geändert und geprüft.")
     return 0
@@ -189,11 +225,14 @@ def cmd_add(args: argparse.Namespace) -> int:
     if source == new:
         raise UsageError("QUELLE und NEU sind gleich.")
     hdfs = Hdfs(args.parallel)
-    changes, found = plan_add(refresh(args, hdfs), source, new)
+    nodes, origin = refresh(args, hdfs)
+    changes, _ = plan_add(nodes, source, new)
+    nodes = recheck(args, hdfs, nodes, [c.path for c in changes])
+    changes, found = plan_add(nodes, source, new)
     if not found:
         print(f"{source} steht in keiner ACL.")
         return 0
-    return execute(args, hdfs, f"add-{new[1:]}", changes)
+    return execute(args, hdfs, f"add-{new[1:]}", changes, nodes, origin)
 
 
 def cmd_replace(args: argparse.Namespace) -> int:
@@ -201,11 +240,13 @@ def cmd_replace(args: argparse.Namespace) -> int:
     if old == new:
         raise UsageError("ALT und NEU sind gleich.")
     hdfs = Hdfs(args.parallel)
-    changes = plan_replace(refresh(args, hdfs), old, new)
+    nodes, origin = refresh(args, hdfs)
+    nodes = recheck(args, hdfs, nodes, [c.path for c in plan_replace(nodes, old, new)])
+    changes = plan_replace(nodes, old, new)
     if not changes:
         print(f"{old} steht in keiner ACL.")
         return 0
-    return execute(args, hdfs, f"replace-{old[1:]}-{new[1:]}", changes)
+    return execute(args, hdfs, f"replace-{old[1:]}-{new[1:]}", changes, nodes, origin)
 
 
 def cmd_remove(args: argparse.Namespace) -> int:
@@ -215,8 +256,11 @@ def cmd_remove(args: argparse.Namespace) -> int:
     if new_owner is not None and not re.fullmatch(r"[^\s|,=]+", new_owner):
         raise UsageError(f"Ungültiger Besitzer '{new_owner}'.")
     hdfs = Hdfs(args.parallel)
-    changes, owned = plan_remove(refresh(args, hdfs), clientid, new_owner)
-    rc = execute(args, hdfs, f"remove-{clientid[1:]}", changes)
+    nodes, origin = refresh(args, hdfs)
+    changes, owned = plan_remove(nodes, clientid, new_owner)
+    nodes = recheck(args, hdfs, nodes, [c.path for c in changes] + owned)
+    changes, owned = plan_remove(nodes, clientid, new_owner)
+    rc = execute(args, hdfs, f"remove-{clientid[1:]}", changes, nodes, origin)
     if owned:
         print(f"Übersprungen: {clientid} ist Besitzer von {len(owned)} Pfaden (--new-owner angeben):",
               file=sys.stderr)
@@ -230,8 +274,12 @@ def cmd_remove(args: argparse.Namespace) -> int:
 def cmd_restore(args: argparse.Namespace) -> int:
     backup = read_backup(args.backup)
     hdfs = Hdfs(args.parallel)
-    changes, conflicts = plan_restore(refresh(args, hdfs), backup, args.force)
-    rc = execute(args, hdfs, "restore", changes)
+    nodes, origin = refresh(args, hdfs)
+    # die Pfade des Backups immer live lesen: das fsimage kennt die
+    # Änderungen, die zurückgedreht werden sollen, meist noch gar nicht
+    nodes = recheck(args, hdfs, nodes, [entry.path for entry in backup])
+    changes, conflicts = plan_restore(nodes, backup, args.force)
+    rc = execute(args, hdfs, "restore", changes, nodes, origin)
     if conflicts:
         print(f"Übersprungen ({len(conflicts)}, mit --force trotzdem zurücksetzen):", file=sys.stderr)
         for conflict in conflicts:

@@ -4,7 +4,7 @@
 ACL-Format: <besitzer>|<eintrag>=<recht>,...  (Details in hdfs.md)
 
 Kommandos:
-  collect             ACLs aus HDFS lesen und in SQLite speichern
+  collect             ACLs aus dem fsimage (oder live) lesen und in SQLite speichern
   search CLIENTID     Pfade, auf die eine clientid Rechte hat (Wildcards erlaubt)
   clients             alle clientids mit Anzahl Pfade
   show PFAD           ACL und effektive Rechte eines Pfads
@@ -14,8 +14,12 @@ Kommandos:
   remove CLIENTID     clientid aus allen ACLs entfernen
   restore BACKUP      Änderungen aus einer Backup-Datei zurückdrehen
 
-add/replace/remove/restore lesen HDFS vorher frisch ein, zeigen den Plan und
-schreiben erst mit --apply. Vor dem Schreiben wird ein Backup angelegt.
+Eingelesen wird das neueste fsimage_<txid> im Ordner der DB (siehe hdfs.md),
+ohne Last auf dem NameNode. --live liest stattdessen direkt aus HDFS.
+
+add/replace/remove/restore lesen ein, lesen die betroffenen Pfade live nach,
+zeigen den Plan und schreiben erst mit --apply. Vor dem Schreiben wird ein
+Backup angelegt.
 
 Nur Standardbibliothek, läuft ab Python 3.9.
 """
@@ -55,8 +59,15 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Name des xattr (Default: $ACL_ATTR oder user.acl)")
     hdfs_opts.add_argument("--depth", type=int, default=2,
                            help="Ebenen unter dem Basisordner (Default 2: Account/Container)")
+    hdfs_opts.add_argument("--fsimage", default=os.environ.get("HDFS_FSIMAGE"),
+                           help="fsimage-Datei (Default: $HDFS_FSIMAGE oder das neueste "
+                                "fsimage_<txid> im Ordner der DB)")
+    hdfs_opts.add_argument("--live", action="store_true",
+                           help="HDFS per getfattr lesen statt aus dem fsimage "
+                                "(ein NameNode-RPC je Pfad, für kleine Bestände)")
     hdfs_opts.add_argument("--parallel", type=int, default=int(os.environ.get("PARALLEL", "8")),
-                           help="parallele setfattr-Aufrufe (Default: $PARALLEL oder 8)")
+                           help="parallele hdfs-Aufrufe beim Nachlesen/Schreiben "
+                                "(Default: $PARALLEL oder 8)")
 
     write_opts = argparse.ArgumentParser(add_help=False)
     write_opts.add_argument("--apply", action="store_true", help="Änderungen wirklich schreiben")
