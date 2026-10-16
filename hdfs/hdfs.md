@@ -34,36 +34,81 @@ uv run hdfs-acl <kommando> ...
 | `commands.py`    | ein `cmd_*` je Kommando, gemeinsamer Ablauf `execute()` fürs Ändern |
 | `acl.py`         | ACL-Format parsen/prüfen, effektive Rechte, Vererbung              |
 | `changes.py`     | `Change` und `plan_*`: was `add`/`replace`/`remove`/`restore` ändern |
-| `hdfs_client.py` | `hdfs dfs -getfattr/-setfattr` aufrufen, Java suchen               |
+| `fsimage.py`     | XML von `hdfs oiv` als Stream lesen, Pfade zusammensetzen          |
+| `hdfs_client.py` | `hdfs oiv`, `hdfs dfs -getfattr/-setfattr` aufrufen, Java suchen   |
 | `store.py`       | SQLite-Schema, DB schreiben/öffnen, Backup-CSV                     |
 | `output.py`      | Ausgabe als Tabelle, CSV oder JSON                                 |
 | `common.py`      | Fehlerklassen, Meldungen auf stderr, natürliche Sortierung         |
 
-`acl.py` und `changes.py` arbeiten nur auf Strings und lassen sich ohne
-HDFS testen.
+`acl.py`, `changes.py` und `fsimage.py` arbeiten nur auf Strings bzw.
+Streams und lassen sich ohne HDFS testen.
 
 Für den HDFS-Client gelten dieselben Variablen wie bei `test.sh`
 (`HADOOP_REPO`, `HADOOP_HOME`, `HADOOP_CONF_DIR`, `HDFS_JAVA_HOME`), siehe
 unten.
 
+### fsimage besorgen
+
+Eingelesen wird aus dem **fsimage**, dem Checkpoint des NameNodes. Das Tool
+wertet es lokal mit `hdfs oiv` aus und stellt dabei **keine einzige Anfrage
+an den NameNode**. Es erwartet das fsimage im selben Ordner wie die DB
+(Default: aktueller Ordner) und nimmt dort das neueste `fsimage_<txid>`
+(höchste txid). Ältere Images kann man löschen.
+
+```bash
+cd /var/tmp/hdfs-acl              # Ordner mit hdfs-acl.db
+hdfs dfsadmin -fetchImage .       # legt fsimage_<txid> hier ab
+hdfs-acl collect
+```
+
+- `hdfs dfsadmin -fetchImage` lädt den letzten Checkpoint per HTTP vom
+  NameNode herunter. Das ist eine reine Dateiübertragung (so groß wie das
+  fsimage, oft mehrere GB) ohne Sperre auf dem Namensraum. In Clustern mit
+  Kerberos braucht es in der Regel HDFS-Adminrechte.
+- Ganz ohne den NameNode: auf dem **Standby-NameNode** das neueste
+  `fsimage_<txid>` aus `<dfs.namenode.name.dir>/current/` kopieren
+  (z. B. per `scp`) und neben die DB legen. Die `.md5`-Datei braucht das Tool
+  nicht.
+- Das fsimage ist so alt wie der letzte Checkpoint. Standby- bzw.
+  Secondary-NameNode schreiben ihn spätestens nach
+  `dfs.namenode.checkpoint.period` (Default 3600 s) oder nach
+  `dfs.namenode.checkpoint.txns` (Default 1.000.000) Änderungen.
+- **Nicht in Produktion:** `hdfs dfsadmin -saveNamespace` erzwingt einen
+  Checkpoint, verlangt aber den Safemode, und der sperrt alle Schreibzugriffe.
+  Nur für den lokalen Test (siehe unten).
+- Bricht `oiv` bei sehr großen Images mit `OutOfMemoryError` ab, hilft
+  `export HADOOP_CLIENT_OPTS=-Xmx8g`.
+
+Anderer Ort: `--fsimage DATEI` oder `$HDFS_FSIMAGE`.
+
 ### Einsammeln
 
 ```bash
-hdfs-acl collect                     # /fs, user.acl -> ./hdfs-acl.db
+hdfs-acl collect                     # /fs, user.acl, fsimage -> ./hdfs-acl.db
 hdfs-acl collect --base-dir /data --attr user.rights --db /var/tmp/acl.db
+hdfs-acl collect --live              # direkt aus HDFS statt aus dem fsimage
 ```
 
-Liest mit je einem `getfattr` pro Ebene (`/fs/*`, `/fs/*/*`) alle Accounts
-und Container, nicht rekursiv. Dateien in den Containern werden also nicht
-angefasst, und es dauert nur ein paar Sekunden. `--depth` ändert die Anzahl
-der Ebenen. Ergebnis ist eine SQLite-Datei mit den Tabellen
+Aus dem fsimage kommen alle Ordner auf den Ebenen unter `--base-dir` (Default
+2: Accounts und Container). Gemerkt werden nur Ordner. Dateien, meist der
+Großteil des Images, kosten nur Lesezeit.
+
+`--live` liest stattdessen mit je einem `getfattr` pro Ebene (`/fs/*`,
+`/fs/*/*`), nicht rekursiv. Das ist aktuell, kostet aber einen NameNode-RPC je
+Pfad, nacheinander. Gut für kleine Bestände und den Test. Ein Pfad, dessen
+Attribute nicht lesbar sind (keine Berechtigung, inzwischen gelöscht), wird
+mit Warnung übersprungen. Ist ein Ordner nicht listbar, bricht `collect` ab,
+weil das Ergebnis sonst Lücken hätte. Anders als das fsimage liefert `--live`
+auch Dateien, die direkt auf diesen Ebenen liegen.
+
+Ergebnis ist eine SQLite-Datei mit den Tabellen
 
 | Tabelle     | Inhalt                                                          |
 |-------------|-----------------------------------------------------------------|
 | `node`      | jeder Pfad mit Roh-ACL, `acl_from` (wessen ACL gilt), Warnungen |
 | `entry`     | nur **aktiv gesetzte** Einträge aller Arten (client/user/group) inkl. Besitzer |
 | `effective` | effektives Recht je `@clientid` und Pfad, Vererbung aufgelöst (berechnet) |
-| `meta`      | Basisordner, Attribut, Zeitpunkt der Sammlung                   |
+| `meta`      | Basisordner, Attribut, Zeitpunkt und Quelle (fsimage/live)      |
 
 Die DB wird bei jedem `collect` komplett neu geschrieben, Abfragen gehen auch
 direkt mit `sqlite3 hdfs-acl.db`. ACLs mit Formatfehlern (kein `|`,
@@ -85,14 +130,27 @@ hdfs-acl export -o export.csv            # Format wie testdata/expected.csv
 Ausgabe sortiert nach clientid, dann Pfad. `--own` liest aus `entry` und
 zeigt statt `acl_from` die Roh-ACL des Pfads. Das `@` an der clientid kann
 man weglassen. Suchen arbeiten auf dem Stand
-des letzten `collect`, der Zeitpunkt steht auf stderr.
+des letzten `collect`, Zeitpunkt und Quelle stehen auf stderr.
 
 ### Ändern
 
-`add`, `replace`, `remove` und `restore` lesen HDFS vorher frisch ein, zeigen für jeden
-betroffenen Pfad alt/neu und schreiben **erst mit `--apply`**. Vor dem
-Schreiben legen sie neben der DB ein Backup `hdfs-acl-backup-<zeit>-<aktion>.csv`
-an (`path;old;new`). Danach lesen sie HDFS erneut und prüfen jeden geänderten Wert.
+`add`, `replace`, `remove` und `restore` laufen so ab:
+
+1. Einlesen wie bei `collect` (fsimage, mit `--live` direkt) und planen.
+2. Die Pfade, die der Plan ändern würde, **live nachlesen** und auf deren
+   aktuellen Werten neu planen. Das fsimage kann eine Stunde alt sein:
+   Pfade, die sich seitdem geändert haben, werden so richtig behandelt,
+   gelöschte übersprungen. `restore` liest die Pfade aus dem Backup immer
+   live, das fsimage kennt die zurückzudrehenden Änderungen meist noch nicht.
+3. Für jeden betroffenen Pfad alt/neu zeigen und **erst mit `--apply`**
+   schreiben. Vorher entsteht neben der DB ein Backup
+   `hdfs-acl-backup-<zeit>-<aktion>.csv` (`path;old;new`).
+4. Die geänderten Pfade erneut lesen, jeden Wert prüfen und die DB mit dem
+   Ergebnis fortschreiben (Quelle z. B. `fsimage_… + replace-client3-newapp`).
+
+Grenze des fsimage: Ein Pfad, der erst **nach** dem Checkpoint die clientid
+bekommen hat, fehlt im Plan. Nach dem nächsten Checkpoint erneut ausführen
+(alle Kommandos sind wiederholbar) oder bei wenigen Pfaden `--live` nehmen.
 
 Geändert werden nur Pfade mit eigener ACL. Container, die erben, ändern sich
 über ihren Account automatisch mit. Einträge für User, Gruppen und andere
@@ -160,13 +218,47 @@ dem Backup entspricht. Pfade, die seitdem jemand anders geändert hat, werden
 übersprungen und gemeldet (Exit-Code 2). `--force` setzt sie trotzdem zurück.
 
 Gemeinsame Optionen: `--db` (`$HDFS_ACL_DB`, Default `./hdfs-acl.db`),
-`--base-dir` (`$BASE_DIR`), `--attr` (`$ACL_ATTR`), `--parallel`
-(`$PARALLEL`, Default 8).
+`--base-dir` (`$BASE_DIR`), `--attr` (`$ACL_ATTR`), `--fsimage`
+(`$HDFS_FSIMAGE`), `--live`, `--parallel` (`$PARALLEL`, Default 8).
+
+### Viele Container
+
+`getfattr`/`setfattr` nehmen nur einen Pfad, jeder Aufruf startet aber eine
+JVM (1-2 s). Das Tool fasst deshalb viele Pfade zu einem Glob
+`/{fs/a1/c1,fs/a1/c2,...}` zusammen (bis 100 KB je Aufruf, rund 2000 Pfade).
+Hadoop löst solche Globs in einzelne Pfade auf, ohne Ordner zu listen. Beim
+Schreiben gehen alle Pfade mit demselben neuen Wert in einen Aufruf.
+`--parallel` Aufrufe laufen gleichzeitig, jeder schickt seine RPCs
+nacheinander. Ein kleineres `--parallel` drosselt die Last auf dem NameNode.
+
+| Schritt                      | NameNode-Last                      | gemessen                                     |
+|------------------------------|------------------------------------|----------------------------------------------|
+| Einlesen aus fsimage         | keine                              | 5 Mio. Inodes (1 Mio. Container): 76 s, 0,6 GB RAM |
+| DB schreiben                 | keine                              | 1 Mio. Container: ca. 30 s, 1,3 GB DB        |
+| Nachlesen/Schreiben/Prüfen   | 1-2 RPCs je **betroffenem** Pfad   | 4000 Pfade schreiben + lesen: 6 s            |
+| Einlesen `--live`            | 1 RPC je Pfad, nacheinander        | geschätzt 5-20 min je Mio. Pfade             |
+
+Gemessen lokal mit einem einzelnen NameNode bzw. synthetischem oiv-XML. Die
+Laufzeit von `oiv` selbst kommt beim fsimage dazu. Der RAM-Bedarf wächst mit
+der Zahl der Ordner im ganzen Image (rund 0,3 GB je Million), nicht mit der
+Zahl der Dateien. Betroffen sind nur Pfade mit eigener ACL, die die clientid
+enthalten. Container, die erben, kosten beim Ändern nichts.
 
 ### Gegen die Testdaten prüfen
 
 ```bash
 ./test.sh --clean
+python3 src/hdfs/main.py collect --live
+python3 src/hdfs/main.py export | diff - testdata/expected.csv && echo OK
+```
+
+Mit fsimage braucht der Testcluster erst einen Checkpoint, der die
+Testdaten enthält. **Nur im Test**, `saveNamespace` sperrt per Safemode alle
+Schreibzugriffe:
+
+```bash
+hdfs dfsadmin -safemode enter && hdfs dfsadmin -saveNamespace && hdfs dfsadmin -safemode leave
+hdfs dfsadmin -fetchImage .
 python3 src/hdfs/main.py collect
 python3 src/hdfs/main.py export | diff - testdata/expected.csv && echo OK
 ```
