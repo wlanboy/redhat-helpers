@@ -137,7 +137,7 @@ def plan_restore(nodes: dict, backup: list, force: bool) -> tuple:
     conflicts = []
     for entry in backup:
         if entry.path not in nodes:
-            conflicts.append(f"{entry.path}: existiert nicht mehr")
+            conflicts.append(f"{entry.path}: existiert nicht mehr oder ist nicht lesbar")
             continue
         current = nodes[entry.path]
         if current != entry.new and not force:
