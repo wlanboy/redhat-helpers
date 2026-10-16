@@ -1,9 +1,10 @@
-"""Zugriff auf HDFS über den Kommandozeilen-Client "hdfs dfs".
+"""Zugriff auf HDFS über den Kommandozeilen-Client "hdfs".
 
 Es gibt keine Python-Bibliothek für HDFS in der Standardbibliothek, deshalb
-werden getfattr/setfattr als Unterprozess aufgerufen. Jeder Aufruf startet eine
-JVM (ca. 1-2 s), daher wird gelesen mit wenigen Glob-Aufrufen und geschrieben
-parallel.
+wird "hdfs dfs -getfattr/-setfattr" bzw. "hdfs oiv" als Unterprozess
+aufgerufen. Jeder Aufruf startet eine JVM (ca. 1-2 s). getfattr/setfattr
+nehmen nur ein Pfad-Argument, viele Pfade passen aber als Glob-Alternativen
+/{fs/a/c1,fs/a/c2,...} in einen Aufruf (siehe path_globs).
 """
 
 from __future__ import annotations
@@ -12,12 +13,17 @@ import base64
 import os
 import re
 import subprocess
+import tempfile
+import xml.etree.ElementTree as ET
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Optional
+from typing import Iterator, Optional
 
-from hdfs.changes import Change
 from hdfs.common import HdfsError, info
+from hdfs.fsimage import parse_fsimage_xml
+
+# Ein einzelnes Argument darf unter Linux höchstens 128 KiB lang sein (MAX_ARG_STRLEN)
+GLOB_BYTES = 100_000
 
 
 def java_major(home: Path) -> Optional[int]:
@@ -101,6 +107,53 @@ def parse_getfattr(output: str, attr: str) -> dict:
     return nodes
 
 
+def command_errors(proc: subprocess.CompletedProcess, command: str, pattern: str) -> list:
+    """Fehler eines "hdfs dfs -<command>"-Aufrufs als [(pfad oder None, zeile)].
+
+    FsShell macht nach einem Fehler an einem Pfad mit den übrigen weiter und
+    schreibt je Fehler eine Zeile "<command>: ...". Der Pfad steht darin als
+    `pfad' (z. B. nicht gefunden) oder inode="pfad" (keine Berechtigung).
+    Ein Glob ohne Treffer (Fehler am Muster selbst) zählt nicht als Fehler.
+    """
+    lines = [line for line in proc.stderr.splitlines() if line.startswith(command + ": ")]
+    if proc.returncode != 0 and not lines:
+        # kein Fehler an einem Pfad, sondern z. B. Aufruf oder JVM kaputt
+        return [(None, stderr_text(proc) or f"Exit-Code {proc.returncode}")]
+    errors = []
+    for line in lines:
+        match = re.search(r"`(.*)': ", line) or re.search(r'inode="([^"]*)"', line)
+        path = match[1] if match else None
+        if not (path == pattern and line.endswith("No such file or directory")):
+            errors.append((path, line))
+    return errors
+
+
+def glob_escape(path: str) -> str:
+    """Zeichen, die im Hadoop-Glob eine Bedeutung haben, mit \\ entwerten."""
+    return re.sub(r"([\\{}\[\]*?,])", r"\\\1", path)
+
+
+def path_globs(paths: list) -> Iterator[tuple]:
+    """Pfade -> [(glob, anzahl)], je Glob /{a/b,c/d,...} höchstens GLOB_BYTES.
+
+    Klammern, deren Alternativen ein "/" enthalten, löst Hadoop vorab in
+    einzelne Pfade auf (GlobExpander): jeder Pfad wird direkt angesprochen,
+    kein Ordner gelistet. Nicht (mehr) vorhandene Pfade passen einfach nicht.
+    Das "/" steht vor der Klammer, sonst wären die Pfade relativ zum Home-Ordner.
+    """
+    batch, size = [], 0
+    for path in paths:
+        part = glob_escape(path.lstrip("/"))
+        length = len(part.encode()) + 1
+        if batch and size + length > GLOB_BYTES:
+            yield "/{" + ",".join(batch) + "}", len(batch)
+            batch, size = [], 0
+        batch.append(part)
+        size += length
+    if batch:
+        yield "/{" + ",".join(batch) + "}", len(batch)
+
+
 class Hdfs:
     """Ein konfigurierter HDFS-Client. Der Konstruktor sucht Hadoop und Java und
     bricht mit HdfsError ab, wenn etwas fehlt, bevor irgendetwas gelesen wird."""
@@ -129,46 +182,124 @@ class Hdfs:
         returncode/stderr ausgewertet, weil manche (leerer Glob) normal sind."""
         return subprocess.run([str(self.bin), "dfs", *args], env=self.env, capture_output=True, text=True)
 
+    def getfattr(self, pattern: str, attr: str) -> tuple:
+        """Ein "getfattr -d" -> ({pfad: wert oder None}, [Fehler ohne Pfad im Ergebnis]).
+
+        getfattr schreibt "# file: pfad" schon vor dem Lesen der Attribute. Ein
+        Pfad, dessen Attribute nicht lesbar waren (inzwischen gelöscht, keine
+        Berechtigung), sähe sonst aus wie "ohne ACL" und würde fälschlich erben.
+        Er wird deshalb entfernt und gemeldet. Fehler, zu denen kein Pfad in
+        der Ausgabe steht (z. B. ein Ordner war beim Globben nicht lesbar),
+        gehen an den Aufrufer.
+        """
+        proc = self.dfs("-getfattr", "-d", pattern)
+        nodes = parse_getfattr(proc.stdout, attr)
+        unexplained = []
+        for path, line in command_errors(proc, "getfattr", pattern):
+            if path in nodes:
+                del nodes[path]
+                info(f"Warnung: übersprungen, {line}")
+            else:
+                unexplained.append(line)
+        return nodes, unexplained
+
     def read_acls(self, base: str, attr: str, depth: int) -> dict:
         """Ein getfattr je Ebene über Globs (base/*, base/*/*, ...), nicht rekursiv,
-        damit Dateien unterhalb der Container nicht mitgelesen werden."""
+        damit Dateien unterhalb der Container nicht mitgelesen werden.
+
+        Belastet den NameNode mit einem RPC je Pfad; bei Millionen Pfaden ist
+        read_fsimage() der bessere Weg.
+        """
         patterns = [base + "/*" * level for level in range(1, depth + 1)]
         info(f"Lese {attr} aus {', '.join(patterns)} ...")
         # Die Ebenen sind unabhängig voneinander, also alle gleichzeitig lesen
         with ThreadPoolExecutor(len(patterns)) as pool:
-            procs = list(pool.map(lambda p: self.dfs("-getfattr", "-d", p), patterns))
+            results = list(pool.map(lambda p: self.getfattr(p, attr), patterns))
         nodes = {}
-        for pattern, proc in zip(patterns, procs):
-            if proc.returncode != 0:
-                error = stderr_text(proc)
-                if "No such file or directory" in error:
-                    continue  # Glob ohne Treffer
-                raise HdfsError(f"getfattr {pattern} fehlgeschlagen:\n{error}")
-            nodes.update(parse_getfattr(proc.stdout, attr))
+        for pattern, (found, errors) in zip(patterns, results):
+            if errors:
+                # Ergebnis wäre lückenhaft: lieber abbrechen als darauf planen
+                raise HdfsError(f"getfattr {pattern} fehlgeschlagen:\n" + "\n".join(errors))
+            nodes.update(found)
+        return nodes
+
+    def read_paths(self, paths: list, attr: str) -> dict:
+        """Liest genau diese Pfade, gebündelt zu Globs und parallel.
+
+        Gelöschte oder nicht lesbare Pfade fehlen im Ergebnis; Fehler werden
+        nur gemeldet, der Aufrufer prüft, welche Pfade fehlen.
+        """
+        patterns = [pattern for pattern, _ in path_globs(paths)]
+        with ThreadPoolExecutor(self.parallel) as pool:
+            results = list(pool.map(lambda p: self.getfattr(p, attr), patterns))
+        wanted = set(paths)
+        nodes = {}
+        for found, errors in results:
+            for error in errors:
+                info(f"Warnung: {error}")
+            nodes.update((path, value) for path, value in found.items() if path in wanted)
+        return nodes
+
+    def read_fsimage(self, image: Path, base: str, attr: str, depth: int) -> dict:
+        """Wertet ein fsimage lokal mit "hdfs oiv -p XML" aus. Die XML-Ausgabe
+        wird als Stream gelesen, es entsteht keine Zwischendatei."""
+        info(f"Lese {attr} aus {image} (hdfs oiv) ...")
+        # stderr in eine Datei: eine zweite Pipe könnte volllaufen, während
+        # stdout gelesen wird, und oiv blockieren
+        with tempfile.TemporaryFile("w+") as err:
+            proc = subprocess.Popen([str(self.bin), "oiv", "-p", "XML", "-i", str(image), "-o", "-"],
+                                    env=self.env, stdout=subprocess.PIPE, stderr=err)
+            assert proc.stdout is not None  # stdout=PIPE
+            try:
+                nodes = parse_fsimage_xml(proc.stdout, base, attr, depth)
+                problem = None
+            except BaseException as error:
+                # oiv beenden, sonst blockiert es auf der nicht mehr gelesenen Pipe
+                if proc.poll() is None:
+                    proc.kill()
+                if not isinstance(error, ET.ParseError):
+                    proc.wait()
+                    raise
+                nodes, problem = {}, f"Ausgabe nicht lesbar: {error}"
+            returncode = proc.wait()
+            if problem or returncode != 0:
+                err.seek(0)
+                lines = [line for line in err.read().splitlines() if "NativeCodeLoader" not in line]
+                raise HdfsError(f"oiv {image} fehlgeschlagen ({problem or f'Exit-Code {returncode}'}):\n"
+                                + "\n".join(lines[-20:]))
         return nodes
 
     def write(self, changes: list, attr: str) -> list:
-        """Setzt/entfernt das Attribut parallel; liefert [(Change, Fehlertext)].
+        """Setzt/entfernt das Attribut; liefert die Fehlermeldungen.
 
-        Ein Fehler bricht nicht ab: die übrigen Pfade werden trotzdem geschrieben
-        und alle Fehler gesammelt zurückgegeben. execute() prüft danach ohnehin
-        jeden Wert durch erneutes Lesen.
+        Pfade mit demselben neuen Wert gehen gebündelt in einen Aufruf (bei
+        replace/remove haben oft Tausende Pfade denselben neuen Wert). Ein
+        Fehler an einem Pfad bricht nicht ab; ob jeder Pfad stimmt, prüft
+        execute() danach ohnehin durch erneutes Lesen.
         """
+        by_value = {}
+        for change in changes:
+            by_value.setdefault(change.new, []).append(change.path)
+        tasks = [(new, pattern, count) for new, paths in by_value.items()
+                 for pattern, count in path_globs(paths)]
 
-        def run(change: Change) -> subprocess.CompletedProcess:
-            if change.new is None:
-                return self.dfs("-setfattr", "-x", attr, change.path)
+        def run(task: tuple) -> subprocess.CompletedProcess:
+            new, pattern, _ = task
+            if new is None:
+                return self.dfs("-setfattr", "-x", attr, pattern)
             # Anführungszeichen: Wert wird immer als Text behandelt, auch bei 0x/0s
-            return self.dfs("-setfattr", "-n", attr, "-v", f'"{change.new}"', change.path)
+            return self.dfs("-setfattr", "-n", attr, "-v", f'"{new}"', pattern)
 
-        failures = []
+        errors = []
+        written = 0
         with ThreadPoolExecutor(self.parallel) as pool:
-            futures = {pool.submit(run, change): change for change in changes}
+            futures = {pool.submit(run, task): task for task in tasks}
             # as_completed: Fortschritt in der Reihenfolge, in der Aufrufe fertig werden
-            for done, future in enumerate(as_completed(futures), 1):
-                change, proc = futures[future], future.result()
-                status = "ok" if proc.returncode == 0 else "FEHLER"
-                info(f"  [{done}/{len(changes)}] {status} {change.path}")
-                if proc.returncode != 0:
-                    failures.append((change, stderr_text(proc)))
-        return failures
+            for future in as_completed(futures):
+                _, pattern, count = futures[future]
+                proc = future.result()
+                lines = [line for _, line in command_errors(proc, "setfattr", pattern)]
+                errors += lines
+                written += count
+                info(f"  [{written}/{len(changes)}] {'FEHLER' if lines else 'ok'}, {count} Pfade")
+        return errors
