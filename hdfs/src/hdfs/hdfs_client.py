@@ -26,6 +26,18 @@ from hdfs.fsimage import parse_fsimage_xml
 GLOB_BYTES = 100_000
 
 
+def _stop(proc: subprocess.Popen) -> Optional[int]:
+    """Beendet einen Prozess, dessen stdout nicht mehr gelesen wird (sonst
+    blockiert er auf der vollen Pipe). Exit-Code, None wenn abgebrochen."""
+    killed = proc.poll() is None
+    if killed:
+        proc.kill()
+    returncode = proc.wait()
+    if proc.stdout:
+        proc.stdout.close()
+    return None if killed else returncode
+
+
 def java_major(home: Path) -> Optional[int]:
     """Hauptversion des Java unter home, None wenn dort keins ist."""
     java = home / "bin" / "java"
@@ -260,23 +272,21 @@ class Hdfs:
             proc = subprocess.Popen([str(self.bin), "oiv", "-p", "XML", "-i", str(image), "-o", "-"],
                                     env=self.env, stdout=subprocess.PIPE, stderr=err)
             assert proc.stdout is not None  # stdout=PIPE
+            problem = None
             try:
                 nodes = parse_fsimage_xml(proc.stdout, base, attr, depth)
-                problem = None
-            except BaseException as error:
-                # oiv beenden, sonst blockiert es auf der nicht mehr gelesenen Pipe
-                if proc.poll() is None:
-                    proc.kill()
-                if not isinstance(error, ET.ParseError):
-                    proc.wait()
-                    raise
-                nodes, problem = {}, f"Ausgabe nicht lesbar: {error}"
-            returncode = proc.wait()
-            if problem or returncode != 0:
+            except ET.ParseError as error:
+                problem = error
+            finally:
+                # Der Parser hört nach <INodeDirectorySection> auf, oder bricht
+                # ab; oiv kann dann noch laufen und braucht nicht weiterzulaufen
+                returncode = _stop(proc)
+            if problem:
                 err.seek(0)
                 lines = [line for line in err.read().splitlines() if "NativeCodeLoader" not in line]
-                raise HdfsError(f"oiv {image} fehlgeschlagen ({problem or f'Exit-Code {returncode}'}):\n"
-                                + "\n".join(lines[-20:]))
+                code = f" (Exit-Code {returncode})" if returncode else ""
+                raise HdfsError(f"oiv {image} fehlgeschlagen{code}, Ausgabe nicht lesbar: {problem}"
+                                + "".join(f"\n{line}" for line in lines[-20:]))
         return nodes
 
     def write(self, changes: list, attr: str) -> list:
