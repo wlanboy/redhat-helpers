@@ -17,7 +17,9 @@ und ein kleines Java-Programm zum Prüfen.
   Kodierungen gegen `blocked.certs`
 - **files/emudhra-blocked.certs** – die 48 Einträge zum manuellen
   Anhängen, für Hosts ohne Ansible
-- **files/emudhra-blocked.certs.sha256** – Prüfsumme dazu
+- **files/emudhra-rejected.pem** – die 16 Intermediates als OpenSSL-Reject-Einträge
+- **files/emudhra-block.cjs** – Preload-Modul für Node.js
+- **files/\*.sha256** – Prüfsummen zu allen Dateien in `files/`
 - **testdata/** – Zertifikate für den Offline-Test, siehe unten
 
 ## CVE-2026-111943
@@ -402,6 +404,158 @@ akzeptiert. Die 16 Basis-Hashes allein reichen also wirklich nicht.
 
 Alles öffentliche Zertifikate von emudhra.we-have-a-problem.com, keine
 privaten Schlüssel.
+
+## Andere Clients: OpenSSL, Netty, Node.js
+
+`blocked.certs` wirkt nur in Java. Alles, was über OpenSSL oder einen
+eigenen Root-Store prüft, braucht eine eigene Maßnahme. Getestet am
+23.10.2026 gegen die Testhosts des Trackers, die OpenSSL-Varianten
+zusätzlich offline mit `testdata/chains`.
+
+| Client | Truststore | Maßnahme |
+|--------|------------|----------|
+| OpenSSL, curl, Python `ssl` | System (`/etc/pki/ca-trust`) | `ca-certificates`-Update, bis dahin Roots sperren oder Reject-Bundle |
+| Netty | JDK (`cacerts` + `blocked.certs`) | nichts extra, Playbook reicht |
+| Node.js | eigener, in Node einkompiliert | Update, bis dahin Preload-Modul |
+
+### OpenSSL
+
+OpenSSL kennt keine Sperrliste für Fingerprints. Es gibt zwei Wege.
+
+**Systemweit: Roots sperren.** Das empfehlen Red Hat (RHSB-2026-012,
+KB 7149312) und der Tracker, bis Red Hat ein neues `ca-certificates`
+ausliefert (CVE-2026-114406, `rpm -q ca-certificates`). Als root:
+
+```bash
+d=/etc/pki/ca-trust/source/blocklist; [ -d $d ] || d=/etc/pki/ca-trust/source/blacklist
+trust extract --overwrite --format=pem-bundle \
+  --filter='pkcs11:object=Comodo%20AAA%20Services%20root;type=cert' \
+  $d/Comodo_AAA_Services_root.pem &&
+trust extract --overwrite --format=pem-bundle \
+  --filter='pkcs11:object=emSign%20ECC%20Root%20CA%20-%20G3;type=cert' \
+  $d/emSign_ECC_Root_CA_-_G3.pem &&
+update-ca-trust
+```
+
+Das trifft alles, was den System-Truststore nutzt: OpenSSL, curl, Python,
+Node mit `--use-openssl-ca`/`--use-system-ca` und das RHEL-OpenJDK über
+`/etc/pki/java/cacerts`. Nachteil: Jedes Zertifikat unter diesen beiden
+Roots ist danach ungültig, auch legitime ältere Sectigo-Ketten über AAA
+und alle emSign-Zertifikate. Vorher prüfen, ob eigene Gegenstellen daran
+hängen. Rückgängig machen durch Löschen der beiden Dateien und erneutes
+`update-ca-trust`.
+
+**Gezielt: Reject-Bundle.**
+[files/emudhra-rejected.pem](files/emudhra-rejected.pem) enthält die 16
+Intermediates im OpenSSL-Format `TRUSTED CERTIFICATE` mit
+`reject anyExtendedKeyUsage`. Steht diese Datei im CA-Bundle, nimmt
+OpenSSL beim Kettenbau die Kopie aus dem Bundle und lehnt sie ab:
+`certificate rejected (28)`. Die Roots bleiben gültig, nur die 16
+Zertifikate fallen raus. Umkodierungen spielen keine Rolle, OpenSSL
+findet das Intermediate über Name und Schlüssel.
+
+```bash
+sha256sum -c emudhra-rejected.pem.sha256
+cat /etc/pki/tls/certs/ca-bundle.crt emudhra-rejected.pem > /etc/pki/tls/emudhra-ca-bundle.pem
+
+SSL_CERT_FILE=/etc/pki/tls/emudhra-ca-bundle.pem openssl s_client -connect host:443
+curl --cacert /etc/pki/tls/emudhra-ca-bundle.pem https://host/
+```
+
+`/etc/pki/tls/certs/ca-bundle.crt` selbst nicht ändern, `update-ca-trust`
+überschreibt die Datei. Das kombinierte Bundle nach jedem
+`ca-certificates`-Update neu bauen. Der Weg wirkt nur für Programme, die
+man auf das Bundle zeigen lassen kann (`SSL_CERT_FILE`, `--cacert`,
+`CAfile` in der Konfiguration). Für alles andere bleibt die
+Root-Sperre.
+
+Getestet mit OpenSSL 3.5.5:
+
+| CA-Bundle | `openssl verify` (14 Ketten) | curl / s_client |
+|-----------|------------------------------|-----------------|
+| nur die Roots | OK, also verwundbar | 200 |
+| Roots + `emudhra-rejected.pem` | 14× certificate rejected | certificate rejected (28) |
+| Systembundle + `emudhra-rejected.pem` | – | example.com 200, Testhost rejected |
+
+Nur `-addreject serverAuth` statt `anyExtendedKeyUsage` reicht nicht.
+Dann lehnt `openssl verify` ohne `-purpose` nicht mit „rejected“ ab,
+sondern scheitert nur zufällig an etwas anderem.
+
+### Netty
+
+Netty braucht nichts Eigenes. Ohne expliziten TrustManager nimmt
+`SslContextBuilder.forClient()` den Standard-TrustManager des JDKs, und
+der prüft `blocked.certs`. Das gilt auch für `SslProvider.OPENSSL`
+(netty-tcnative/BoringSSL): Den Handshake macht BoringSSL, die
+Kettenprüfung ruft Netty trotzdem im Java-TrustManager auf. Auch mit
+eigener CA-Datei per `trustManager(File)` greift die Sperre, weil Netty
+daraus einen normalen PKIX-TrustManager baut.
+
+Getestet mit Netty 4.1.118, netty-tcnative-boringssl-static 2.0.70 und
+Temurin 21.0.8 mit importierter AAA-Root:
+
+| `blocked.certs` | JDK-Provider | OPENSSL-Provider |
+|-----------------|--------------|------------------|
+| original | verwundbar | verwundbar |
+| mit den 48 Einträgen | `Untrusted certificate` | `Untrusted certificate` |
+| mit den 48 Einträgen, `trustManager(roots.pem)` | `Untrusted certificate` | `Untrusted certificate` |
+
+Also reichen Playbook und Neustart der Anwendung. Das gilt genauso für
+Reactor Netty bzw. Spring WebClient, solange kein eigener TrustManager
+gesetzt ist. Nicht abgedeckt:
+
+- `InsecureTrustManagerFactory` oder eigene TrustManager ohne PKIX. Die
+  prüfen gar nicht bzw. selbst, `blocked.certs` spielt dann keine Rolle.
+- Netty in einem GraalVM Native Image, siehe oben.
+
+### Node.js
+
+Node bringt einen eigenen, einkompilierten Root-Store mit und nutzt den
+System-Truststore nur mit `--use-openssl-ca` oder `--use-system-ca`. Im
+eingebauten Store fehlt AAA Certificate Services, aber
+emSign ECC Root CA - G3 ist drin. Node 24.21.0 hat sich im Test über die
+emSign-Kette ohne Fehler verbunden, mit `https` und mit `fetch`.
+
+Behoben in Node.js 22.23.4, 24.22.1 und 26.12.1. Das Update ist der
+richtige Weg.
+
+Bis dahin hilft [files/emudhra-block.cjs](files/emudhra-block.cjs). Das
+Modul ersetzt `tls.checkServerIdentity` und lehnt jede Verbindung ab,
+deren geprüfte Kette einen der acht kompromittierten Schlüssel enthält.
+Es vergleicht den SHA-256 über den öffentlichen Schlüssel (SPKI), wie
+Go. Acht Werte decken damit emSign-Ausstellung, Sectigo-Cross-Sign und
+alle Umkodierungen ab.
+
+```bash
+sha256sum -c emudhra-block.cjs.sha256
+install -m 644 emudhra-block.cjs /opt/emudhra/emudhra-block.cjs
+
+NODE_OPTIONS="--require /opt/emudhra/emudhra-block.cjs" node app.js
+```
+
+Für eine systemd-Unit:
+
+```ini
+[Service]
+Environment=NODE_OPTIONS=--require /opt/emudhra/emudhra-block.cjs
+```
+
+Ein vorhandenes `NODE_OPTIONS` ergänzen, nicht überschreiben. Das Modul
+funktioniert auch bei ESM-Anwendungen.
+
+Getestet mit Node 24.21.0:
+
+| Aufruf | emSign-Kette | AAA-Kette | example.com |
+|--------|--------------|-----------|-------------|
+| ohne Modul | verwundbar | keine Root | 200 |
+| mit Modul | `ERR_TLS_CERT_EMUDHRA_BLOCKED` | keine Root | 200 |
+| mit Modul, AAA per `NODE_EXTRA_CA_CERTS` | `ERR_TLS_CERT_EMUDHRA_BLOCKED` | `ERR_TLS_CERT_EMUDHRA_BLOCKED` | 200 |
+| `--use-openssl-ca`, `SSL_CERT_FILE` = Reject-Bundle | `INVALID_PURPOSE` | `INVALID_PURPOSE` | – |
+
+Nicht abgedeckt sind Aufrufe mit eigener `checkServerIdentity`-Option und
+natürlich `rejectUnauthorized: false`. Die letzte Zeile zeigt den
+anderen Weg: Mit `--use-openssl-ca` greift das OpenSSL-Reject-Bundle aus
+dem vorigen Abschnitt auch in Node.
 
 ## Quellen
 
