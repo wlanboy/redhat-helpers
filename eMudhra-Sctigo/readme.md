@@ -438,7 +438,7 @@ update-ca-trust
 ```
 
 Das trifft alles, was den System-Truststore nutzt: OpenSSL, curl, Python,
-Node mit `--use-openssl-ca`/`--use-system-ca` und das RHEL-OpenJDK über
+Node mit `--use-openssl-ca` (nicht `--use-system-ca`, siehe Node.js) und das RHEL-OpenJDK über
 `/etc/pki/java/cacerts`. Nachteil: Jedes Zertifikat unter diesen beiden
 Roots ist danach ungültig, auch legitime ältere Sectigo-Ketten über AAA
 und alle emSign-Zertifikate. Vorher prüfen, ob eigene Gegenstellen daran
@@ -510,14 +510,44 @@ gesetzt ist. Nicht abgedeckt:
 
 ### Node.js
 
-Node bringt einen eigenen, einkompilierten Root-Store mit und nutzt den
-System-Truststore nur mit `--use-openssl-ca` oder `--use-system-ca`. Im
+Node bringt einen eigenen, einkompilierten Root-Store mit. Im
 eingebauten Store fehlt AAA Certificate Services, aber
 emSign ECC Root CA - G3 ist drin. Node 24.21.0 hat sich im Test über die
 emSign-Kette ohne Fehler verbunden, mit `https` und mit `fetch`.
 
 Behoben in Node.js 22.23.4, 24.22.1 und 26.12.1. Das Update ist der
 richtige Weg.
+
+**`--use-system-ca` hilft nicht.** Die Option nimmt die System-Roots
+*zusätzlich* zu den eingebauten. emSign ECC Root CA - G3 kommt dann
+weiter aus dem eingebauten Store, auch wenn der System-Truststore schon
+gepatcht ist. `NODE_USE_SYSTEM_CA=1` und
+`--use-bundled-ca --use-system-ca` verhalten sich genauso. Nur
+`--use-openssl-ca` ersetzt den eingebauten Store durch den des Systems.
+
+Getestet mit Node 24.21.0 auf Ubuntu 26.04 mit gepatchtem
+`ca-certificates` 20260816ubuntu0.26.04.1, dort ist emSign ECC Root CA -
+G3 deaktiviert. 14 Testhosts, davon 7 über die emSign-Kette:
+
+| Aufruf | geladene Roots | emSign ECC Root CA - G3 | verwundbar |
+|--------|----------------|-------------------------|------------|
+| Standard | 121 | ja | 7 von 14 |
+| `--use-system-ca` | 489 | ja | 7 von 14 |
+| `NODE_USE_SYSTEM_CA=1` | – | – | 7 von 14 |
+| `--use-openssl-ca` | System | nein | 0 von 14 |
+| Preload `tls.setDefaultCACertificates(tls.getCACertificates('system'))` | 123 | nein | 0 von 14 |
+
+Die übrigen 7 sind die AAA-Ketten, die scheitern schon an der fehlenden
+Root. example.com war in allen Fällen erreichbar.
+
+`--use-openssl-ca` oder der Preload mit `setDefaultCACertificates` sind
+damit eine Alternative zum Modul unten, aber nur, wenn der
+System-Truststore gepatcht ist bzw. die Roots dort gesperrt sind (siehe
+OpenSSL). Auf RHEL heißt das: erst `ca-certificates`-Update oder
+Root-Sperre, dann Node umstellen. Ob die eigene Node-Version
+`setDefaultCACertificates` hat (24.21.0 hat es), zeigt
+`node -p "typeof require('tls').setDefaultCACertificates"`, sonst bleibt
+`--use-openssl-ca`.
 
 Bis dahin hilft [files/emudhra-block.cjs](files/emudhra-block.cjs). Das
 Modul ersetzt `tls.checkServerIdentity` und lehnt jede Verbindung ab,
