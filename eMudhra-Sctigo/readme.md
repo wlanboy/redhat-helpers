@@ -17,6 +17,7 @@ und ein kleines Java-Programm zum Prüfen.
   Kodierungen gegen `blocked.certs`
 - **files/emudhra-blocked.certs** – die 48 Einträge zum manuellen
   Anhängen, für Hosts ohne Ansible
+- **files/emudhra-blocked.certs.sha256** – Prüfsumme dazu
 - **testdata/** – Zertifikate für den Offline-Test, siehe unten
 
 ## CVE-2026-111943
@@ -232,6 +233,22 @@ dieselben 48 Einträge wie das Playbook, mit `Algorithm=SHA-256` am Anfang.
 Die Datei wird an die vorhandene Sperrdatei angehängt. Nicht ersetzen,
 das JDK bringt eigene Einträge mit, Temurin 21.0.8 zum Beispiel 38 Stück.
 Die zweite `Algorithm`-Zeile stört nicht.
+
+Nach dem Kopieren auf den Zielhost zuerst die Prüfsumme kontrollieren:
+
+```
+SHA-256 14cc75cddbb0d5b60f0a645ff428b5166f23fa4d8ebf3bfa2373272885ec73f0  emudhra-blocked.certs
+```
+
+```bash
+sha256sum -c emudhra-blocked.certs.sha256
+# oder ohne die .sha256-Datei
+echo "14cc75cddbb0d5b60f0a645ff428b5166f23fa4d8ebf3bfa2373272885ec73f0  emudhra-blocked.certs" | sha256sum -c
+```
+
+Wer die Datei ändert, muss die Prüfsumme neu erzeugen
+(`sha256sum emudhra-blocked.certs > emudhra-blocked.certs.sha256`) und
+hier nachtragen.
 
 ```bash
 for f in /usr/java/*/lib/security/blocked.certs \
