@@ -13,6 +13,9 @@ und ein kleines Java-Programm zum Prüfen.
 
 - **blocked-certs.yml** – Playbook, trägt die 48 Fingerprints ein
 - **CheckEmudhra.java** – testet ein JDK gegen die 14 Testhosts des Trackers
+- **CheckEmudhraOffline.java** – derselbe Test ohne Netz, plus alle 48
+  Kodierungen gegen `blocked.certs`
+- **testdata/** – Zertifikate für den Offline-Test, siehe unten
 
 ## CVE-2026-111943
 
@@ -273,6 +276,85 @@ Getestet mit Temurin 21.0.8+9, also ohne den Fix im JDK. Vor dem Playbook
 kam die Verbindung über die emSign-Kette zustande, nach Import der
 AAA-Root auch über die Sectigo-Kette. Nach dem Playbook lehnte das JDK
 alle 14 Hosts mit `Untrusted certificate` ab.
+
+### Offline prüfen
+
+Für Hosts ohne Internetzugang. `CheckEmudhraOffline.java` baut keine
+Verbindung auf, sondern lässt den PKIX-Validator des JDKs die Zertifikate
+aus `testdata/` prüfen. Das ist derselbe Code, den auch der TLS-Handshake
+nutzt, inklusive `blocked.certs`. Sperrlisten-Abfragen per OCSP/CRL sind
+abgeschaltet.
+
+```bash
+cd eMudhra-Sctigo
+/usr/java/jdk-21/bin/java CheckEmudhraOffline.java
+# anderer Pfad zu den Testdaten
+/usr/java/jdk-21/bin/java CheckEmudhraOffline.java /opt/check/testdata
+# JDK 8
+/usr/java/jdk1.8.0_401/bin/javac -d /tmp CheckEmudhraOffline.java
+/usr/java/jdk1.8.0_401/bin/java -cp /tmp CheckEmudhraOffline testdata
+```
+
+Auf die Zielhosts müssen nur `CheckEmudhraOffline.java` und `testdata/`.
+Der Test läuft in zwei Teilen.
+
+**Teil 1: blocked.certs.** Jedes der 16 Intermediates wird in allen
+Kodierungen erzeugt, also 48 Zertifikate, und gegen seine direkte Root
+aus `testdata/roots.pem` validiert. Das Ergebnis hängt nur an
+`blocked.certs`, nicht daran, welche Roots im `cacerts` stehen. Pro Zeile
+steht der Fingerprint dabei, so sieht man genau, welcher Eintrag fehlt.
+
+```
+OK           42C4ACCD...1493 EM DV TLS CA - G3B / emSign Root TLS CA - G3 [DER]
+OK           CD740652...6978 EM DV TLS CA - G3B / emSign Root TLS CA - G3 [NULL]
+OK           37E86658...EFA8 EM DV TLS CA - G3B / emSign Root TLS CA - G3 [s']
+NICHT GESP.  ...
+```
+
+`[DER]` ist das Zertifikat wie ausgestellt, `[NULL]` mit umgeschaltetem
+NULL-Parameter, `[s']` und `[NULL+s']` mit malleabler ECDSA-Signatur.
+
+**Teil 2: Ketten.** Die 14 Ketten der Testhosts aus `testdata/chains`
+werden gegen den Truststore des JDKs validiert. Das ist `cacerts`,
+`jssecacerts` falls vorhanden, oder was in `-Djavax.net.ssl.trustStore`
+steht, Passwort aus `-Djavax.net.ssl.trustStorePassword`, Default
+`changeit`. Mögliche Ergebnisse:
+
+| Ausgabe | Bedeutung |
+|---------|-----------|
+| `OK gesperrt` | Kette endet an einer vertrauten Root, `blocked.certs` lehnt sie ab |
+| `OK keine Root` | die Root der Kette steht nicht im Truststore, z. B. AAA bei Temurin |
+| `VERWUNDBAR` | das JDK vertraut der Kette |
+
+Die Leaf-Zertifikate laufen am 3. bzw. 5. Mai 2027 ab. Danach prüft das
+Programm zum Zeitpunkt einen Tag nach Ausstellung des Leafs, damit der
+Test weiter funktioniert.
+
+Exit-Code 0 heißt alles gesperrt, 1 mindestens ein Zertifikat nicht
+gesperrt oder eine Kette vertraut, 2 Fehler in den Testdaten.
+
+Getestet ohne Netzwerk (`unshare -rn`) mit Temurin 21.0.8+9 und als
+Java-8-Bytecode (`javac --release 8`):
+
+| Zustand | Teil 1 | Teil 2 |
+|---------|--------|--------|
+| Original `blocked.certs`, AAA-Root importiert | 48× NICHT GESP. | 14× VERWUNDBAR |
+| nach dem Playbook, AAA-Root importiert | 48× OK | 14× OK gesperrt |
+| nach dem Playbook, ohne AAA-Root | 48× OK | 6× keine Root, 8× gesperrt |
+
+Die erste Zeile zeigt auch, dass das JDK alle umkodierten Varianten
+akzeptiert. Die 16 Basis-Hashes allein reichen also wirklich nicht.
+
+### testdata/
+
+| Datei | Inhalt | Quelle |
+|-------|--------|--------|
+| `intermediates.pem` | die 16 Intermediates | `impacted-intermediates.json` |
+| `roots.pem` | emSign Root TLS CA - G3, emSign Root CS CA - G3, AAA Certificate Services | `roots.json` |
+| `chains/*.pem` | die Ketten der 14 Testhosts, Leaf zuerst | `chains.zip` vom 20./22.10.2026 |
+
+Alles öffentliche Zertifikate von emudhra.we-have-a-problem.com, keine
+privaten Schlüssel.
 
 ## Quellen
 
