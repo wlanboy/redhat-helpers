@@ -508,6 +508,47 @@ gesetzt ist. Nicht abgedeckt:
   prüfen gar nicht bzw. selbst, `blocked.certs` spielt dann keine Rolle.
 - Netty in einem GraalVM Native Image, siehe oben.
 
+### Spring-Boot-Webserver und mTLS
+
+Bisher ging es um ausgehende Verbindungen. Ein Server mit Client-Zertifikat
+(mTLS, `server.ssl.client-auth=need` oder `want`) prüft dagegen
+eingehende Zertifikate. Ohne eigenen Truststore läuft das über `cacerts`.
+Wer einen der kompromittierten Schlüssel hat, kann sich damit ein
+Client-Zertifikat unter einem der Intermediates ausstellen. Deshalb gilt
+die Sperre auch hier, und das habe ich getestet.
+
+Da die echten eMudhra-Schlüssel dafür nötig wären, lief der Test mit einer
+selbst gebauten CA: Root, zwei Intermediates (eines gesperrt, eines
+nicht), je ein Client-Zertifikat darunter. Der Fingerprint des gesperrten
+Intermediate kam in `blocked.certs`, der Truststore des Servers enthielt
+nur die Test-Root. Dann eine Spring-Boot-App mit mTLS auf jedem
+eingebetteten Server, Aufruf per `curl --cert`.
+
+Getestet mit Spring Boot 3.3.5 und Temurin 21.0.8:
+
+| Server | gesperrtes Client-Cert | gültiges Client-Cert |
+|--------|------------------------|----------------------|
+| Tomcat (Standard) | abgelehnt | verbunden |
+| Jetty | abgelehnt | verbunden |
+| Undertow | abgelehnt | verbunden |
+| Reactor Netty | abgelehnt | verbunden |
+| pures JSSE `SSLServerSocket` | abgelehnt (`Untrusted certificate`) | verbunden |
+
+Ohne den Eintrag in `blocked.certs` nehmen alle beide Zertifikate an. Die
+vier eingebetteten Server prüfen eingehende Zertifikate also über den
+Java-TrustManager, und der beachtet `blocked.certs`. Playbook und Neustart
+reichen. Nicht abgedeckt:
+
+- **Tomcat mit nativem OpenSSL** (`sslImplementationName` =
+  `OpenSSLImplementation`, über tcnative/APR oder die Panama-FFM-Variante).
+  Dann validiert OpenSSL die Kette, nicht der Java-TrustManager, und
+  OpenSSL kennt `blocked.certs` nicht. In der Testumgebung ließ sich das
+  nicht nachstellen, die Implementierungsklasse steckt nicht in
+  `tomcat-embed-core`. Das ist aber ein bewusstes Opt-in mit
+  Zusatz-Abhängigkeiten, kein Standard. Wer es nutzt, muss den
+  OpenSSL-Weg absichern (Reject-Bundle, siehe OpenSSL-Abschnitt).
+- **Eigener TrustManager** in der Anwendung, der nicht über PKIX prüft.
+
 ### Node.js
 
 Node bringt einen eigenen, einkompilierten Root-Store mit. Im
