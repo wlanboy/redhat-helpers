@@ -15,6 +15,8 @@ und ein kleines Java-Programm zum Prüfen.
 - **CheckEmudhra.java** – testet ein JDK gegen die 14 Testhosts des Trackers
 - **CheckEmudhraOffline.java** – derselbe Test ohne Netz, plus alle 48
   Kodierungen gegen `blocked.certs`
+- **files/emudhra-blocked.certs** – die 48 Einträge zum manuellen
+  Anhängen, für Hosts ohne Ansible
 - **testdata/** – Zertifikate für den Offline-Test, siehe unten
 
 ## CVE-2026-111943
@@ -222,6 +224,32 @@ ansible-playbook -i ../inventory/hosts.ini blocked-certs.yml -e emudhra_state=ab
 | `emudhra_state` | `present` | `absent` entfernt den Block wieder |
 | `emudhra_java_dirs` | `[/usr/java]` | Suchpfade, z. B. zusätzlich `/usr/lib/jvm` für die RHEL-Pakete oder `/opt` |
 | `emudhra_backup` | `true` | Sicherung vor jeder Änderung |
+
+### Ohne Ansible
+
+[files/emudhra-blocked.certs](files/emudhra-blocked.certs) enthält
+dieselben 48 Einträge wie das Playbook, mit `Algorithm=SHA-256` am Anfang.
+Die Datei wird an die vorhandene Sperrdatei angehängt. Nicht ersetzen,
+das JDK bringt eigene Einträge mit, Temurin 21.0.8 zum Beispiel 38 Stück.
+Die zweite `Algorithm`-Zeile stört nicht.
+
+```bash
+for f in /usr/java/*/lib/security/blocked.certs \
+         /usr/java/*/lib/security/blacklisted.certs \
+         /usr/java/*/jre/lib/security/blacklisted.certs; do
+  [ -f "$f" ] && [ ! -L "$(dirname "$(dirname "$(dirname "$f")")")" ] || continue
+  grep -q 42C4ACCD12C4F59597925E1A08A7A90102608543809308D50EC427E118BA1493 "$f" && continue
+  cp -p "$f" "$f.bak-cve-2026-111943"
+  { echo; cat emudhra-blocked.certs; } >> "$f"
+  echo "ergänzt: $f"
+done
+```
+
+Die Schleife überspringt Symlinks wie `/usr/java/latest` und JDKs, die
+den ersten Hash schon enthalten. Das `echo` davor sorgt für einen
+Zeilenumbruch, falls der letzte Eintrag der Originaldatei keinen hat.
+Sonst würde der erste Kommentar an den letzten Hash geklebt und diesen
+Eintrag kaputt machen.
 
 ### Was das Playbook nicht abdeckt
 
