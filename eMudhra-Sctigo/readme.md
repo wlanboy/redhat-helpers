@@ -237,7 +237,8 @@ Die zweite `Algorithm`-Zeile stört nicht.
 for f in /usr/java/*/lib/security/blocked.certs \
          /usr/java/*/lib/security/blacklisted.certs \
          /usr/java/*/jre/lib/security/blacklisted.certs; do
-  [ -f "$f" ] && [ ! -L "$(dirname "$(dirname "$(dirname "$f")")")" ] || continue
+  [ -f "$f" ] || continue
+  f=$(readlink -f "$f")
   grep -q 42C4ACCD12C4F59597925E1A08A7A90102608543809308D50EC427E118BA1493 "$f" && continue
   cp -p "$f" "$f.bak-cve-2026-111943"
   { echo; cat emudhra-blocked.certs; } >> "$f"
@@ -245,8 +246,9 @@ for f in /usr/java/*/lib/security/blocked.certs \
 done
 ```
 
-Die Schleife überspringt Symlinks wie `/usr/java/latest` und JDKs, die
-den ersten Hash schon enthalten. Das `echo` davor sorgt für einen
+Die Schleife löst Symlinks wie `/usr/java/latest` auf und überspringt
+Dateien, die den ersten Hash schon enthalten. So wird jedes JDK nur
+einmal ergänzt, auch bei mehrfachem Aufruf. Das `echo` davor sorgt für einen
 Zeilenumbruch, falls der letzte Eintrag der Originaldatei keinen hat.
 Sonst würde der erste Kommentar an den letzten Hash geklebt und diesen
 Eintrag kaputt machen.
