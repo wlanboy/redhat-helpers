@@ -335,7 +335,7 @@ nutzt, inklusive `blocked.certs`. Sperrlisten-Abfragen per OCSP/CRL sind
 abgeschaltet.
 
 ```bash
-cd eMudhra-Sctigo
+cd eMudhra-Sectigo
 /usr/java/jdk-21/bin/java CheckEmudhraOffline.java
 # anderer Pfad zu den Testdaten
 /usr/java/jdk-21/bin/java CheckEmudhraOffline.java /opt/check/testdata
