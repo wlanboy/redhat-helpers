@@ -1,7 +1,8 @@
 ---
 # Sperrt die kompromittierten eMudhra-Intermediates (CVE-2026-111943 /
 # CVE-2026-91403, RHSB-2026-012) samt Sectigo-Cross-Signs in allen JDKs
-# unter /usr/java. Trägt die Fingerprints in lib/security/blocked.certs
+# und JREs unter /usr/java und /opt/local/test/jvm. Trägt die Fingerprints
+# in lib/security/blocked.certs
 # bzw. (JDK 8, ältere 11er) jre/lib/security/blacklisted.certs ein.
 #
 #   ansible-playbook -i hosts.ini blocked-certs.yml --check --diff
@@ -16,8 +17,10 @@
   become: true
   vars:
     emudhra_state: present
+    # Fehlt ein Pfad auf einem Host, gibt find nur eine Warnung aus.
     emudhra_java_dirs:
       - /usr/java
+      - /opt/local/test/jvm
     emudhra_backup: true
     # Quelle: https://emudhra.we-have-a-problem.com/impacted-intermediates.json
     # Pro Zertifikat der Fingerprint des DER wie ausgestellt, die Variante

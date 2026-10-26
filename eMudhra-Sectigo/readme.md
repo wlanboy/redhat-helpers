@@ -6,7 +6,8 @@ Acht Intermediate-CAs von eMudhra haben Schlüssel, die sich aus dem
 Zertifikat selbst zurückrechnen lassen. Wer sie hat, kann für jede Domain
 ein TLS-Zertifikat ausstellen, dem ein ungepatchtes JDK vertraut. Dieses
 Verzeichnis enthält ein Playbook, das die betroffenen Zertifikate in allen
-JDKs unter `/usr/java` per `blocked.certs` bzw. `blacklisted.certs` sperrt,
+JDKs und JREs unter `/usr/java` und `/opt/local/test/jvm` per
+`blocked.certs` bzw. `blacklisted.certs` sperrt,
 und ein kleines Java-Programm zum Prüfen.
 
 ## Dateien
@@ -200,10 +201,12 @@ ansible-playbook -i ../inventory/hosts.ini blocked-certs.yml
 Das Playbook braucht root (`become: true`), weil die JDKs unter
 `/usr/java` root gehören. Pro Host macht es Folgendes:
 
-1. Sucht unter `/usr/java` bis Tiefe 5 nach `blocked.certs` und
-   `blacklisted.certs` und behält nur Treffer unter `lib/security` bzw.
-   `jre/lib/security`. Symlinks wie `/usr/java/latest` oder
-   `/usr/java/default` folgt es nicht, jedes JDK kommt nur einmal dran.
+1. Sucht unter `/usr/java` und `/opt/local/test/jvm` bis Tiefe 5 nach
+   `blocked.certs` und `blacklisted.certs` und behält nur Treffer unter
+   `lib/security` bzw. `jre/lib/security`. Symlinks wie `/usr/java/latest`
+   oder `/usr/java/default` folgt es nicht, jedes JDK kommt nur einmal
+   dran. Fehlt eines der Verzeichnisse auf einem Host, gibt es nur eine
+   Warnung.
 2. Meldet JDKs, die ein `cacerts` haben, aber keine Sperrdatei. Diese
    ändert das Playbook nicht, sie müssen von Hand geprüft werden.
 3. Prüft die `Algorithm`-Zeile. Steht dort etwas anderes als SHA-256,
@@ -225,7 +228,7 @@ ansible-playbook -i ../inventory/hosts.ini blocked-certs.yml -e emudhra_state=ab
 |----------|---------|-----------|
 | `emudhra_hosts` | `all` | Host-Gruppe |
 | `emudhra_state` | `present` | `absent` entfernt den Block wieder |
-| `emudhra_java_dirs` | `[/usr/java]` | Suchpfade, z. B. zusätzlich `/usr/lib/jvm` für die RHEL-Pakete oder `/opt` |
+| `emudhra_java_dirs` | `[/usr/java, /opt/local/test/jvm]` | Suchpfade, z. B. zusätzlich `/usr/lib/jvm` für die RHEL-Pakete |
 | `emudhra_backup` | `true` | Sicherung vor jeder Änderung |
 
 ### Ohne Ansible
@@ -255,7 +258,10 @@ hier nachtragen.
 ```bash
 for f in /usr/java/*/lib/security/blocked.certs \
          /usr/java/*/lib/security/blacklisted.certs \
-         /usr/java/*/jre/lib/security/blacklisted.certs; do
+         /usr/java/*/jre/lib/security/blacklisted.certs \
+         /opt/local/test/jvm/*/lib/security/blocked.certs \
+         /opt/local/test/jvm/*/lib/security/blacklisted.certs \
+         /opt/local/test/jvm/*/jre/lib/security/blacklisted.certs; do
   [ -f "$f" ] || continue
   f=$(readlink -f "$f")
   grep -q 42C4ACCD12C4F59597925E1A08A7A90102608543809308D50EC427E118BA1493 "$f" && continue
