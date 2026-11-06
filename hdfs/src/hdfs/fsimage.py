@@ -169,17 +169,17 @@ def _collect(section: str, elem: ET.Element, ns: str, name: str,
     """Einen fertigen Eintrag (Ebene 3) auswerten."""
     if section == "INodeSection" and elem.tag == "inode":
         if elem.findtext("type") == "DIRECTORY":
-            inode = int(elem.findtext("id"))
+            inode = int(elem.findtext("id") or 0)
             # intern: Namen wie container1 wiederholen sich in jedem Account
             dirs[inode] = sys.intern(unmangle(elem.findtext("name") or ""))
             for xattr in elem.iterfind("xattrs/xattr"):
                 if xattr.findtext("ns") == ns and xattr.findtext("name") == name:
                     acls[inode] = unmangle(xattr.findtext("val") or "")
     elif section == "INodeReferenceSection" and elem.tag == "ref":
-        refs.append(int(elem.findtext("referredId")))
+        refs.append(int(elem.findtext("referredId") or 0))
     elif section == "INodeDirectorySection" and elem.tag == "directory":
-        children = [int(c.text) for c in elem.iterfind("child")]
-        children += [refs[int(c.text)] for c in elem.iterfind("refChild")]
+        children = [int(c.text or 0) for c in elem.iterfind("child")]
+        children += [refs[int(c.text or 0)] for c in elem.iterfind("refChild")]
         children = [c for c in children if c in dirs]
         if children:
-            kids[int(elem.findtext("parent"))] = children
+            kids[int(elem.findtext("parent") or 0)] = children
