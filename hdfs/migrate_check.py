@@ -10,7 +10,7 @@ gelten muss:
               mindestens dieselben (verodert mit eigenen Rechten von NEU).
             - Es gibt nur einen Besitzer, und der bleibt: War ALT Besitzer,
               ist es weiter ALT. NEU steht dort als Eintrag mit den Rechten
-              des Besitzers (mindestens 3).
+              des Besitzers plus ADMINISTRATION (mindestens 3 + 16 = 19).
             - Außer den Einträgen von NEU ist jede ACL Wort für Wort gleich,
               NEU steht genau einmal da.
   replaced  nach Phase 2 (replace ALT NEU) oder direktem replace:
@@ -21,6 +21,8 @@ gelten muss:
               Besitzer. NEU steht höchstens einmal als Eintrag da, als
               Besitzer nur mit Bits über 3.
             - Pfade ohne ALT sind Wort für Wort unverändert.
+            Mit --after-add (Phase 2 nach Phase 1) behält NEU das Bit 16 aus
+            Phase 1 dort, wo ALT Besitzer war.
   restored  nach dem Zurückdrehen: Rechte und ACLs genau wie in den Testdaten.
 
 Exit-Code 0, wenn alles stimmt, sonst 1.
@@ -37,7 +39,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from hdfs.acl import OWNER_PERM, Acl, covers, split_token  # noqa: E402
+from hdfs.acl import ADMIN_PERM, OWNER_PERM, Acl, covers, split_token  # noqa: E402
 
 
 def principals(raw: Optional[str]) -> set:
@@ -63,8 +65,13 @@ def read_csv(path: Path) -> list:
         return list(csv.DictReader(file, delimiter=";"))
 
 
-def want_rights(expected: list, stage: str, old: str, new: str) -> dict:
-    """Erwartete effektive Rechte {(pfad, clientid): (recht, acl_von)}."""
+def want_rights(expected: list, owners: dict, stage: str, old: str, new: str,
+                after_add: bool) -> dict:
+    """Erwartete effektive Rechte {(pfad, clientid): (recht, acl_von)}.
+
+    owners: {pfad: besitzer} aus acls.csv. Wo die gültige ACL (acl_von) ALT
+    als Besitzer hat, bekommt NEU bei add zusätzlich ADMIN_PERM.
+    """
     rights = {}
 
     def grant(path: str, clientid: str, perm: int, acl_from: str) -> None:
@@ -72,12 +79,14 @@ def want_rights(expected: list, stage: str, old: str, new: str) -> dict:
 
     for row in expected:
         path, clientid, perm, acl_from = row["path"], row["clientid"], int(row["perm"]), row["acl_from"]
+        admin = ADMIN_PERM if clientid == old and owners.get(acl_from) == old else 0
         if stage == "replaced" and clientid == old:
-            grant(path, new, perm, acl_from)  # ALT heißt jetzt NEU
+            # ALT heißt jetzt NEU; nach add bleibt das Bit 16 aus Phase 1
+            grant(path, new, perm | (admin if after_add else 0), acl_from)
         else:
             grant(path, clientid, perm, acl_from)
             if stage == "added" and clientid == old:
-                grant(path, new, perm, acl_from)  # NEU bekommt zusätzlich die Rechte von ALT
+                grant(path, new, perm | admin, acl_from)  # NEU bekommt zusätzlich die Rechte von ALT
     return rights
 
 
@@ -94,8 +103,9 @@ def check_added(before: Acl, after: Acl, old: str, new: str) -> list:
             errors.append(f"Einträge {new}={perms} neben Besitzer {new}")
     elif len(perms) != 1:
         errors.append(f"{new} steht {len(perms)}-mal als Eintrag da, erwartet einmal")
-    elif before.owner == old and not covers(perms[0], OWNER_PERM):
-        errors.append(f"{new}={perms[0]} hat nicht die Rechte des Besitzers {old} ({OWNER_PERM})")
+    elif before.owner == old and not covers(perms[0], OWNER_PERM | ADMIN_PERM):
+        errors.append(f"{new}={perms[0]} hat nicht die Rechte des Besitzers {old} "
+                      f"plus ADMINISTRATION ({OWNER_PERM | ADMIN_PERM})")
     return errors
 
 
@@ -119,6 +129,8 @@ def main() -> int:
     parser.add_argument("--stage", choices=["added", "replaced", "restored"], required=True)
     parser.add_argument("--old", help="clientid vor der Migration")
     parser.add_argument("--new", help="clientid nach der Migration")
+    parser.add_argument("--after-add", action="store_true",
+                        help="--stage replaced nach Phase 1 (add): NEU behält das Bit 16")
     parser.add_argument("--acls", type=Path, required=True, help="acls.csv von test.sh")
     parser.add_argument("--expected", type=Path, required=True, help="expected.csv von test.sh")
     parser.add_argument("--db", type=Path, required=True, help="DB von collect --live")
@@ -134,7 +146,9 @@ def main() -> int:
     errors = []
 
     # effektive Rechte
-    wanted = want_rights(read_csv(args.expected), args.stage, args.old, args.new)
+    acls = read_csv(args.acls)
+    owners = {row["path"]: Acl.parse(row["acl"]).owner for row in acls if row["acl"]}
+    wanted = want_rights(read_csv(args.expected), owners, args.stage, args.old, args.new, args.after_add)
     for key in sorted(wanted.keys() | actual_rights.keys()):
         want, got = wanted.get(key), actual_rights.get(key)
         if want != got:
@@ -142,7 +156,7 @@ def main() -> int:
 
     # Roh-ACLs
     touched = unchanged = owned = 0
-    for row in read_csv(args.acls):
+    for row in acls:
         path, before = row["path"], row["acl"] or None
         if path not in actual_acl:
             errors.append(f"{path}: fehlt")

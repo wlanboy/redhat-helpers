@@ -10,7 +10,8 @@
 #      aus dem fsimage plant und nur die betroffenen Pfade live nachliest
 #   3. Phase 1, "add ALT NEU": beide clientids greifen. Es gibt nur einen
 #      Besitzer, ALT bleibt es; NEU bekommt dort einen Eintrag mit den
-#      Rechten des Besitzers (3), sonst die Rechte von ALT. Prüfen.
+#      Rechten des Besitzers plus ADMINISTRATION (3 + 16 = 19), sonst die
+#      Rechte von ALT. Prüfen.
 #   4. Phase 2, "replace ALT NEU": ALT wird vollständig durch NEU ersetzt,
 #      auch als Besitzer. Prüfen: effektive Rechte wie vorher, nur heißt
 #      ALT jetzt NEU; ALT steht nirgends mehr; der Rest ist unverändert.
@@ -145,7 +146,9 @@ if (( ! DIRECT )); then
 fi
 echo "Phase 2: $OLD vollständig durch $NEW ersetzen (replace) ..."
 apply replace "replace-${OLD#@}-${NEW#@}" "$OLD" "$NEW"
-check "Phase 2" --stage replaced --old "$OLD" --new "$NEW" || FAILED=1
+PHASE2=(--stage replaced --old "$OLD" --new "$NEW")
+(( DIRECT )) || PHASE2+=(--after-add)
+check "Phase 2" "${PHASE2[@]}" || FAILED=1
 
 # Zurückdrehen in umgekehrter Reihenfolge; danach muss alles wie vorher sein
 echo "Drehe die Migration zurück ..."

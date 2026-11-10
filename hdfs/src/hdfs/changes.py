@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from hdfs.acl import OWNER_PERM, Acl, covers, split_token
+from hdfs.acl import ADMIN_PERM, OWNER_PERM, Acl, covers, split_token
 
 
 @dataclass
@@ -55,6 +55,12 @@ def merge_entries(tokens: list, principal: str, owner: bool) -> list:
 def plan_add(nodes: dict, source: str, new: str) -> tuple:
     """NEU bekommt überall mindestens die Rechte (alle Bits) von QUELLE (Migration).
 
+    Phase 1 einer Migration: beide clientids greifen. Eine ACL hat nur einen
+    Besitzer, ist QUELLE Besitzer, bleibt sie es. NEU bekommt dort einen
+    Eintrag mit den Rechten des Besitzers (OWNER_PERM) plus ADMIN_PERM,
+    damit NEU die ACL verwalten kann wie der Besitzer. Erst replace macht
+    NEU zum Besitzer.
+
     Liefert (changes, found); found = Anzahl ACLs, in denen QUELLE vorkommt,
     damit der Aufrufer "QUELLE steht nirgends" von "schon alles erledigt"
     unterscheiden kann. Herabgestuft wird nie, mehrfaches Ausführen ist
@@ -70,8 +76,11 @@ def plan_add(nodes: dict, source: str, new: str) -> tuple:
         if source not in rights:
             continue
         found += 1
-        # effektives Recht verwenden: ist QUELLE Besitzer, bekommt NEU =3 als Eintrag
-        perm = rights[source][0]
+        # effektives Recht verwenden: ist QUELLE Besitzer, bekommt NEU =3 als
+        # Eintrag und dazu das Verwaltungsrecht des Besitzers (=19)
+        perm, source_owns = rights[source]
+        if source_owns:
+            perm |= ADMIN_PERM
         if covers(rights.get(new, (0, False))[0], perm):
             continue
         # anhängen; vorhandene Einträge von NEU werden an ihrer Stelle um die

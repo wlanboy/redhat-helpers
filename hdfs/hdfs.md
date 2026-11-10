@@ -29,6 +29,29 @@ Hilfsmittel rund um ACL-Metadaten (xattr `user.acl`) auf Ordnern im HDFS.
 Beispiel: `@client1|@client2=3,svc_backup=1,@client3=1,#ops=3` ergibt
 `@client1=3`, `@client2=3`, `@client3=1`.
 
+### Bezug zu Spring Security ACL
+
+Nachgelesen im Quelltext von Spring Security (`acl/…/domain`, Branch `main`):
+
+- `BasePermission`: READ `1`, WRITE `2`, CREATE `4`, DELETE `8`,
+  ADMINISTRATION `16`. Mit diesen Standardwerten wäre `3` = READ + WRITE.
+  „`3` = lesen + schreiben + löschen“ gilt nur, wenn die eigene
+  `PermissionFactory` die Bits anders belegt.
+- Der Besitzer hat in Spring **keine Datenrechte**: Die Prüfung eines Rechts
+  (`DefaultPermissionGrantingStrategy.isGranted`) geht nur die Einträge
+  durch. „Der Besitzer hat immer `3`“ ist eine Regel der Anwendung.
+- Der Besitzer darf aber die **ACL verwalten**
+  (`AclAuthorizationStrategyImpl.securityCheck`): Einträge anlegen, ändern
+  und löschen, `setParent`, `setEntriesInheriting` und den Besitzer wechseln.
+  Alle anderen brauchen dafür einen Eintrag mit ADMINISTRATION (`16`) oder
+  eine passende Rolle. Mit `16` dürfen sie zusätzlich die Audit-Einstellungen
+  ändern, die der Besitzer nicht ändern darf.
+- Standard-Spring vergleicht die Maske eines Eintrags exakt (`==`), nicht
+  bitweise. Kombinierte Masken wie `3`, `19` oder `21` setzen eine eigene,
+  bitweise Auswertung in der Anwendung voraus, wie sie dieses Tool annimmt.
+
+Deshalb bekommt NEU bei `add` dort, wo ALT Besitzer ist, `3` + `16` = `19`.
+
 ## hdfs-acl – ACLs einsammeln, suchen, migrieren
 
 Paket `src/hdfs/`, nur Standardbibliothek, läuft ab Python 3.9 (RHEL 9).
@@ -190,8 +213,12 @@ hdfs-acl add @client3 @newapp            # Plan ansehen
 hdfs-acl add @client3 @newapp --apply
 ```
 
-- Ist `@client3` Besitzer, wird `@newapp=3` als Eintrag ergänzt (der
-  Besitzer bleibt einer).
+- Ist `@client3` Besitzer, bleibt es Besitzer, denn eine ACL hat nur
+  einen. `@newapp` bekommt dort einen Eintrag mit den Rechten des Besitzers
+  (`3`) plus ADMINISTRATION (`16`), also `@newapp=19`. Aus
+  `@client3|@test1=1,@test2=2` wird `@client3|@test1=1,@test2=2,@newapp=19`.
+  Das Bit `16` braucht `@newapp`, um die ACL wie der Besitzer verwalten zu
+  können (siehe unten). Erst `replace` macht `@newapp` zum Besitzer.
 - Hat `@newapp` schon alle Bits von `@client3`, passiert nichts. Fehlen
   welche, werden sie im vorhandenen Eintrag ergänzt (`@newapp=4` und
   `@client3=1` ergibt `@newapp=5`). Entfernt wird nie ein Bit.
@@ -231,18 +258,28 @@ nicht den User `newapp`. Ein User als neuer Besitzer geht nicht. Die
 clientid selbst als neuer Besitzer (`remove @a --new-owner @a`) wird
 abgelehnt, ihre Bits über `3` gingen sonst verloren.
 
-Migration in zwei Schritten (erst ergänzen, Anwendung umstellen, dann
-aufräumen):
+Eine clientid wird in zwei Phasen migriert. In Phase 1 greifen beide, und
+die Anwendung kann umgestellt werden. Phase 2 ersetzt die alte clientid
+vollständig:
 
 ```bash
-hdfs-acl add @client3 @newapp --apply                          # @newapp=3 auch, wo @client3 Besitzer ist
+hdfs-acl add @client3 @newapp --apply      # Phase 1: @newapp=19, wo @client3 Besitzer bleibt
 # ... Anwendung auf @newapp umstellen ...
-hdfs-acl remove @client3 --new-owner @newapp --apply           # @newapp wird dort Besitzer
+hdfs-acl replace @client3 @newapp --apply  # Phase 2: @newapp ersetzt @client3, auch als Besitzer
 ```
 
-Die Rechte sind danach dieselben wie bei `replace @client3 @newapp`. Nur die
-Reihenfolge der Einträge kann abweichen, weil `add` neue Einträge hinten
-anhängt.
+Statt `replace` geht in Phase 2 auch `remove @client3 --new-owner @newapp`.
+Das Ergebnis hat dieselben Rechte, nur die Reihenfolge der Einträge kann
+abweichen.
+
+Wo `@client3` Besitzer war, bleibt nach Phase 2 der Eintrag aus Phase 1
+neben dem neuen Besitzer stehen: Aus `@client3|@test1=1,@test2=2` wird
+erst `@client3|@test1=1,@test2=2,@newapp=19`, dann
+`@newapp|@test1=1,@test2=2,@newapp=19`. `replace` kann das Bit `16` aus
+Phase 1 nicht von einem bewusst gesetzten unterscheiden und lässt es
+deshalb stehen. Als Besitzer braucht `@newapp` es nicht mehr, es erlaubt nur
+zusätzlich, die Audit-Einstellungen zu ändern. Ein direktes
+`replace @client3 @newapp` ohne Phase 1 setzt kein `16`.
 
 ```bash
 # zurückdrehen

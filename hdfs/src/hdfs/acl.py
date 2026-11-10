@@ -20,6 +20,10 @@ from hdfs.common import UsageError
 
 # Recht des Besitzers, auch wenn er gar nicht oder schwächer gelistet ist
 OWNER_PERM = 3
+# BasePermission.ADMINISTRATION in Spring Security ACL: darf die ACL selbst
+# verwalten (Einträge ändern, Besitzer wechseln). Der Besitzer darf das in
+# Spring ohne dieses Bit (AclAuthorizationStrategyImpl), alle anderen nur mit.
+ADMIN_PERM = 16
 # Spring speichert die Maske als Java-int, höchstes nutzbares Bit ist 1 << 30
 MAX_PERM = (1 << 31) - 1
 
