@@ -119,7 +119,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("remove", parents=[db_opts, hdfs_opts, write_opts], help="clientid entfernen")
     p.add_argument("clientid")
-    p.add_argument("--new-owner", help="neuer Besitzer, wo CLIENTID Besitzer ist (sonst übersprungen); "
+    p.add_argument("--new-owner", help="neuer Besitzer, wo CLIENTID Besitzer ist (sonst übersprungen): "
+                                       "clientid (@ wird ergänzt) oder #gruppe; "
                                        "dessen eigene Einträge entfallen dann")
     p.set_defaults(func=cmd_remove)
 
