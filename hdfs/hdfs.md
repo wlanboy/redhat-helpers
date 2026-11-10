@@ -402,13 +402,19 @@ immer identisch.
 ## migrate.sh – Migration durchspielen
 
 Spielt eine Migration ALT → NEU auf einem frischen Docker-NameNode durch und
-prüft sie. Einen Testcluster braucht das Skript nicht.
+prüft jede Phase. Einen Testcluster braucht das Skript nicht.
+
+Eine clientid lässt sich nur in zwei Phasen migrieren. Erst greifen beide,
+damit die Anwendung umgestellt werden kann. Eine ACL hat aber nur einen
+Besitzer: In Phase 1 bleibt ALT Besitzer, und NEU bekommt dort einen Eintrag
+mit den Rechten des Besitzers. Erst in Phase 2 ersetzt NEU die alte clientid
+vollständig, auch als Besitzer.
 
 ```bash
-./migrate.sh                              # @client3 -> @newapp mit replace (~4,5 min)
-./migrate.sh @client3 @client4            # NEU hat schon Rechte: Bits beider
-./migrate.sh @client3 @newapp --two-step  # add, dann remove --new-owner
-./migrate.sh --keep                       # Container und Arbeitsordner behalten
+./migrate.sh                     # @client3 -> @newapp in zwei Phasen (~4,5 min)
+./migrate.sh @client3 @client4   # NEU hat schon Rechte: Bits beider
+./migrate.sh --direct            # nur replace, ohne Phase 1
+./migrate.sh --keep              # Container und Arbeitsordner behalten
 ```
 
 Ablauf:
@@ -417,25 +423,33 @@ Ablauf:
    laden. Die Vergleichsdateien landen im Arbeitsordner, `testdata/` im
    Repo bleibt unberührt.
 2. fsimage erzeugen und holen. `hdfs-acl` plant damit wie im echten Betrieb
-   aus dem fsimage und liest nur die betroffenen Pfade live nach.
-3. Migrieren, erst als Dry-Run (Anzahl betroffener Pfade), dann mit
-   `--apply`: `replace ALT NEU` oder mit `--two-step` erst
-   `add ALT NEU`, dann `remove ALT --new-owner NEU`.
-4. HDFS mit `collect --live` einlesen und mit `migrate_check.py` prüfen:
+   aus dem fsimage und liest nur die betroffenen Pfade live nach. Phase 2
+   plant auf demselben fsimage von vor Phase 1, das Nachlesen muss die
+   Einträge aus Phase 1 also bemerken.
+3. **Phase 1**, `add ALT NEU` (erst Dry-Run, dann `--apply`), danach prüfen
+   (`migrate_check.py --stage added`):
+   - ALT hat genau die Rechte wie vorher. NEU hat an jedem Pfad von ALT
+     mindestens dieselben, mit eigenen Rechten verodert.
+   - Der Besitzer bleibt: War ALT Besitzer, ist es weiter ALT, und NEU
+     steht dort als Eintrag mit mindestens `3`.
+   - Außer den Einträgen von NEU ist jede ACL Wort für Wort gleich, NEU
+     steht genau einmal da.
+4. **Phase 2**, `replace ALT NEU`, danach prüfen (`--stage replaced`):
    - Die effektiven Rechte entsprechen genau `expected.csv`, nur heißt ALT
      jetzt NEU. Hatte NEU an einem Pfad schon Rechte, gelten die Bits beider.
    - ALT steht in keiner ACL mehr, weder als Besitzer noch als Eintrag.
-   - Jede ACL mit ALT wurde geändert und enthält NEU.
-   - Besitzerwechsel: War ALT Besitzer, ist jetzt NEU Besitzer, sonst
-     bleibt der Besitzer. NEU steht höchstens einmal als Eintrag da, als
-     Besitzer nur mit Bits über `3`. Bei `@client3` sind das 22 der 73
-     ACLs, darunter „nur Besitzer“ (`@client3|`), „Besitzer zusätzlich
-     mit `=1` gelistet“ und „Besitzer mit `=8`“. Die effektiven Rechte
-     allein reichen hier nicht: `hans|...,@newapp=3` statt `@newapp|...`
-     gäbe `@newapp` dieselben Rechte.
+   - War ALT Besitzer, ist jetzt NEU Besitzer, sonst bleibt der Besitzer.
+     NEU steht höchstens einmal als Eintrag da, als Besitzer nur mit Bits
+     über `3`.
    - Alle anderen Pfade sind Wort für Wort unverändert.
-5. Alle Backups rückwärts mit `restore` zurückspielen. Danach müssen Rechte
-   und ACLs genau den Testdaten entsprechen (`migrate_check.py --restored`).
+5. Beide Backups rückwärts mit `restore` zurückspielen. Danach müssen Rechte
+   und ACLs genau den Testdaten entsprechen (`--stage restored`).
+
+Bei `@client3` ist ALT an 22 der 73 ACLs Besitzer, darunter „nur Besitzer“
+(`@client3|`), „Besitzer zusätzlich mit `=1` gelistet“ und „Besitzer mit
+`=8`“ (NEU bekommt dort in Phase 1 `=11`). Die effektiven Rechte allein
+reichen für die Prüfung nicht: `hans|...,@newapp=3` statt `@newapp|...`
+gäbe `@newapp` dieselben Rechte, deshalb wird der Besitzer eigens geprüft.
 
 Exit-Code 0, wenn alles stimmt. Es gelten dieselben Umgebungsvariablen wie
 bei `test.sh`, außer `OUT_DIR` und `HADOOP_CONF_DIR`.
