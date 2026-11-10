@@ -346,6 +346,10 @@ BASE_DIR=/acltest ACL_ATTR=user.rights ./test.sh --clean
 | `HADOOP_HOME`     | `$HADOOP_REPO/downloads/hadoop-$HADOOP_VERSION` |
 | `HADOOP_CONF_DIR` | `$HADOOP_REPO/clientconfig`                     |
 | `HDFS_JAVA_HOME`  | gesucht, siehe unten                            |
+| `DOCKER_IMAGE`    | `apache/hadoop:$HADOOP_VERSION` (nur `--docker`) |
+
+Java-Suche, Hadoop-Client und Start des Docker-NameNodes stehen in
+`lib.sh`, das `test.sh` und `migrate.sh` einbinden.
 
 ### Java
 
@@ -394,3 +398,37 @@ immer identisch.
 | c%5=4                | `#admins\|peter=3,#ops=1`                         | keine Client-ID → niemand            |
 | `container48`        | `cl(n+9)\|cl(n+1)=5,#ops=16,cl(n+1)=16,cl(n+9)=8,cn=doc,ou=hell,dc=firma=3,cn=testgroup` | Masken > 3: ODER (21), Besitzer 3\|8=11; LDAP ignoriert |
 | `container49`        | `cl(n+8)\|`                                       | nur Besitzer, keine Einträge         |
+
+## migrate.sh – Migration durchspielen
+
+Spielt eine Migration ALT → NEU auf einem frischen Docker-NameNode durch und
+prüft sie. Einen Testcluster braucht das Skript nicht.
+
+```bash
+./migrate.sh                              # @client3 -> @newapp mit replace (~4,5 min)
+./migrate.sh @client3 @client4            # NEU hat schon Rechte: Bits beider
+./migrate.sh @client3 @newapp --two-step  # add, dann remove --new-owner
+./migrate.sh --keep                       # Container und Arbeitsordner behalten
+```
+
+Ablauf:
+
+1. NameNode starten wie bei `test.sh --docker`, Testdaten mit `test.sh`
+   laden. Die Vergleichsdateien landen im Arbeitsordner, `testdata/` im
+   Repo bleibt unberührt.
+2. fsimage erzeugen und holen. `hdfs-acl` plant damit wie im echten Betrieb
+   aus dem fsimage und liest nur die betroffenen Pfade live nach.
+3. Migrieren, erst als Dry-Run (Anzahl betroffener Pfade), dann mit
+   `--apply`: `replace ALT NEU` oder mit `--two-step` erst
+   `add ALT NEU`, dann `remove ALT --new-owner NEU`.
+4. HDFS mit `collect --live` einlesen und mit `migrate_check.py` prüfen:
+   - Die effektiven Rechte entsprechen genau `expected.csv`, nur heißt ALT
+     jetzt NEU. Hatte NEU an einem Pfad schon Rechte, gelten die Bits beider.
+   - ALT steht in keiner ACL mehr, weder als Besitzer noch als Eintrag.
+   - Jede ACL mit ALT wurde geändert und enthält NEU.
+   - Alle anderen Pfade sind Wort für Wort unverändert.
+5. Alle Backups rückwärts mit `restore` zurückspielen. Danach müssen Rechte
+   und ACLs genau den Testdaten entsprechen (`migrate_check.py --restored`).
+
+Exit-Code 0, wenn alles stimmt. Es gelten dieselben Umgebungsvariablen wie
+bei `test.sh`, außer `OUT_DIR` und `HADOOP_CONF_DIR`.
