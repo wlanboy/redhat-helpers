@@ -200,6 +200,10 @@ class Hdfs:
         self.bin = home / "bin" / "hdfs"
         if not self.bin.is_file():
             raise HdfsError(f"{self.bin} nicht gefunden (HADOOP_HOME oder --hadoop-version setzen).")
+        # Ohne core-site.xml gilt fs.defaultFS=file:///: getfattr liest dann das
+        # lokale Dateisystem, findet keinen Pfad und meldet nicht einmal einen Fehler
+        if not (conf / "core-site.xml").is_file():
+            raise HdfsError(f"{conf}/core-site.xml nicht gefunden (HADOOP_CONF_DIR setzen).")
         java_home = find_java(repo)
         # eigene Umgebung nur für die hdfs-Unterprozesse, os.environ bleibt unverändert
         self.env = {
@@ -217,25 +221,26 @@ class Hdfs:
         return subprocess.run([str(self.bin), "dfs", *args], env=self.env, capture_output=True, text=True)
 
     def getfattr(self, pattern: str, attr: str) -> tuple:
-        """Ein "getfattr -d" -> ({pfad: wert oder None}, [Fehler ohne Pfad im Ergebnis]).
+        """Ein "getfattr -d" -> ({pfad: wert oder None}, übersprungen, unerklärt).
 
         getfattr schreibt "# file: pfad" schon vor dem Lesen der Attribute. Ein
         Pfad, dessen Attribute nicht lesbar waren (inzwischen gelöscht, keine
         Berechtigung), sähe sonst aus wie "ohne ACL" und würde fälschlich erben.
-        Er wird deshalb entfernt und gemeldet. Fehler, zu denen kein Pfad in
-        der Ausgabe steht (z. B. ein Ordner war beim Globben nicht lesbar),
-        gehen an den Aufrufer.
+        Er wird deshalb entfernt, sein Fehler kommt in "übersprungen". Fehler,
+        zu denen kein Pfad in der Ausgabe steht (z. B. ein Ordner war beim
+        Globben nicht lesbar, Kerberos-Ticket abgelaufen, NameNode nicht
+        erreichbar), kommen in "unerklärt". Beides als [(pfad oder None, zeile)].
         """
         proc = self.dfs("-getfattr", "-d", pattern)
         nodes = parse_getfattr(proc.stdout, attr)
-        unexplained = []
+        skipped, unexplained = [], []
         for path, line in command_errors(proc, "getfattr", pattern):
             if path in nodes:
                 del nodes[path]
-                info(f"Warnung: übersprungen, {line}")
+                skipped.append((path, line))
             else:
-                unexplained.append(line)
-        return nodes, unexplained
+                unexplained.append((path, line))
+        return nodes, skipped, unexplained
 
     def read_acls(self, base: str, attr: str, depth: int) -> dict:
         """Ein getfattr je Ebene über Globs (base/*, base/*/*, ...), nicht rekursiv,
@@ -250,28 +255,41 @@ class Hdfs:
         with ThreadPoolExecutor(len(patterns)) as pool:
             results = list(pool.map(lambda p: self.getfattr(p, attr), patterns))
         nodes = {}
-        for pattern, (found, errors) in zip(patterns, results):
+        for pattern, (found, skipped, errors) in zip(patterns, results):
             if errors:
                 # Ergebnis wäre lückenhaft: lieber abbrechen als darauf planen
-                raise HdfsError(f"getfattr {pattern} fehlgeschlagen:\n" + "\n".join(errors))
+                raise HdfsError(f"getfattr {pattern} fehlgeschlagen:\n"
+                                + "\n".join(line for _, line in errors))
+            for _, line in skipped:
+                info(f"Warnung: übersprungen, {line}")
             nodes.update(found)
         return nodes
 
-    def read_paths(self, paths: list, attr: str) -> dict:
+    def read_paths(self, paths: list, attr: str, strict: bool = True) -> dict:
         """Liest genau diese Pfade, gebündelt zu Globs und parallel.
 
-        Gelöschte oder nicht lesbare Pfade fehlen im Ergebnis; Fehler werden
-        nur gemeldet, der Aufrufer prüft, welche Pfade fehlen.
+        Gelöschte Pfade fehlen im Ergebnis. Jeder andere Fehler (keine
+        Berechtigung, Kerberos, NameNode nicht erreichbar, Fehler ohne Pfad)
+        bricht mit strict ab: der Aufrufer hielte einen nicht lesbaren Pfad
+        sonst für gelöscht und ließe ihn still aus dem Plan fallen. Ohne
+        strict werden alle Fehler nur gemeldet und die Pfade fehlen.
         """
         patterns = [pattern for pattern, _ in path_globs(paths)]
         with ThreadPoolExecutor(self.parallel) as pool:
             results = list(pool.map(lambda p: self.getfattr(p, attr), patterns))
         wanted = set(paths)
-        nodes = {}
-        for found, errors in results:
-            for error in errors:
-                info(f"Warnung: {error}")
+        nodes, fatal = {}, []
+        for found, skipped, unexplained in results:
+            for path, line in skipped + unexplained:
+                if path is not None and line.endswith("No such file or directory"):
+                    info(f"Warnung: gelöscht, {line}")
+                elif strict:
+                    fatal.append(line)
+                else:
+                    info(f"Warnung: {line}")
             nodes.update((path, value) for path, value in found.items() if path in wanted)
+        if fatal:
+            raise HdfsError(f"Nachlesen von {len(paths)} Pfaden fehlgeschlagen:\n" + "\n".join(fatal))
         return nodes
 
     def read_fsimage(self, image: Path, base: str, attr: str, depth: int) -> dict:
