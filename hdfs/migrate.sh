@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
 #
-# migrate.sh [ALT] [NEU] [--two-step] [--keep]
+# migrate.sh [ALT] [NEU] [--direct] [--keep]
 #
 # Spielt eine Migration ALT -> NEU (Default @client3 -> @newapp) mit
-# hdfs-acl auf einem frischen NameNode durch und prüft das Ergebnis:
+# hdfs-acl auf einem frischen NameNode durch und prüft jede Phase:
 #   1. NameNode per Docker starten (wie test.sh --docker, Konfiguration in
 #      namenode/), Testdaten mit test.sh laden
 #   2. fsimage erzeugen und holen, damit hdfs-acl wie im echten Betrieb
 #      aus dem fsimage plant und nur die betroffenen Pfade live nachliest
-#   3. migrieren, erst als Dry-Run, dann mit --apply:
-#        Standard     hdfs-acl replace ALT NEU
-#        --two-step   hdfs-acl add ALT NEU, dann remove ALT --new-owner NEU
-#   4. HDFS live einlesen und mit migrate_check.py gegen die Testdaten
-#      prüfen: effektive Rechte wie vorher, nur ALT heißt jetzt NEU; ALT
-#      steht in keiner ACL mehr; alle anderen Pfade sind unverändert
-#   5. restore des Backups (bei --two-step beider, rückwärts) und prüfen,
-#      dass HDFS wieder genau den Testdaten entspricht
+#   3. Phase 1, "add ALT NEU": beide clientids greifen. Es gibt nur einen
+#      Besitzer, ALT bleibt es; NEU bekommt dort einen Eintrag mit den
+#      Rechten des Besitzers (3), sonst die Rechte von ALT. Prüfen.
+#   4. Phase 2, "replace ALT NEU": ALT wird vollständig durch NEU ersetzt,
+#      auch als Besitzer. Prüfen: effektive Rechte wie vorher, nur heißt
+#      ALT jetzt NEU; ALT steht nirgends mehr; der Rest ist unverändert.
+#      Geplant wird dabei auf dem fsimage von vor Phase 1, das Nachlesen
+#      muss die Einträge aus Phase 1 bemerken.
+#   5. Beide Backups rückwärts mit restore zurückspielen und prüfen, dass
+#      HDFS wieder genau den Testdaten entspricht
+#
+# --direct  ohne Phase 1, nur "replace ALT NEU" (beide greifen nie zugleich)
 #
 # Container und Arbeitsordner werden am Ende gelöscht, mit --keep nicht.
 # ALT und NEU ohne "@" bekommen es ergänzt. NEU darf schon Rechte haben
@@ -37,7 +41,7 @@ PARALLEL=${PARALLEL:-8}
 
 OLD=""
 NEW=""
-TWO_STEP=0
+DIRECT=0
 
 usage() {
     sed -n '3,/^$/p' "$0" | sed 's/^# \{0,1\}//'
@@ -45,7 +49,7 @@ usage() {
 
 for arg in "$@"; do
     case $arg in
-        --two-step) TWO_STEP=1 ;;
+        --direct) DIRECT=1 ;;
         --keep) KEEP=1 ;;
         -h|--help) usage; exit 0 ;;
         -*) echo "Fehler: Unbekannte Option '$arg' (siehe --help)." >&2; exit 1 ;;
@@ -121,26 +125,27 @@ step "collect" acl_tool collect
 echo "Vorher: $OLD hat Rechte an $(acl_tool search "$OLD" --format csv 2>/dev/null | tail -n +2 | wc -l) Pfaden," \
      "$NEW an $(acl_tool search "$NEW" --format csv 2>/dev/null | tail -n +2 | wc -l)."
 
-if (( TWO_STEP )); then
-    echo "Migriere $OLD -> $NEW in zwei Schritten (add, dann remove --new-owner) ..."
-    step "add (Dry-Run)" acl_tool add "$OLD" "$NEW"
-    echo "  add:     $(planned)"
-    step "add --apply" acl_tool add "$OLD" "$NEW" --apply
-    step "remove (Dry-Run)" acl_tool remove "$OLD" --new-owner "$NEW"
-    echo "  remove:  $(planned)"
-    step "remove --apply" acl_tool remove "$OLD" --new-owner "$NEW" --apply
-    BACKUPS=("$(latest_backup "remove-${OLD#@}")" "$(latest_backup "add-${NEW#@}")")
-else
-    echo "Migriere $OLD -> $NEW mit replace ..."
-    step "replace (Dry-Run)" acl_tool replace "$OLD" "$NEW"
-    echo "  replace: $(planned)"
-    step "replace --apply" acl_tool replace "$OLD" "$NEW" --apply
-    BACKUPS=("$(latest_backup "replace-${OLD#@}-${NEW#@}")")
-fi
-echo "  Backup: ${BACKUPS[*]##*/}"
-
 FAILED=0
-check "die Migration" --old "$OLD" --new "$NEW" || FAILED=1
+BACKUPS=()
+
+# apply <kommando> <backup-label> <argumente...>: Dry-Run, dann --apply
+apply() {
+    local command=$1 label=$2
+    shift 2
+    step "$command (Dry-Run)" acl_tool "$command" "$@"
+    printf '  %-8s %s\n' "$command:" "$(planned)"
+    step "$command --apply" acl_tool "$command" "$@" --apply
+    BACKUPS=("$(latest_backup "$label")" "${BACKUPS[@]}")
+}
+
+if (( ! DIRECT )); then
+    echo "Phase 1: $OLD und $NEW greifen beide (add) ..."
+    apply add "add-${NEW#@}" "$OLD" "$NEW"
+    check "Phase 1" --stage added --old "$OLD" --new "$NEW" || FAILED=1
+fi
+echo "Phase 2: $OLD vollständig durch $NEW ersetzen (replace) ..."
+apply replace "replace-${OLD#@}-${NEW#@}" "$OLD" "$NEW"
+check "Phase 2" --stage replaced --old "$OLD" --new "$NEW" || FAILED=1
 
 # Zurückdrehen in umgekehrter Reihenfolge; danach muss alles wie vorher sein
 echo "Drehe die Migration zurück ..."
@@ -148,7 +153,7 @@ for backup in "${BACKUPS[@]}"; do
     step "restore $backup" acl_tool restore "$backup" --apply
     echo "  restore ${backup##*/}: $(planned)"
 done
-check "den Stand nach restore" --restored || FAILED=1
+check "den Stand nach restore" --stage restored || FAILED=1
 cd - > /dev/null
 
 if (( FAILED )); then

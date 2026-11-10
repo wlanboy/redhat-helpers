@@ -2,16 +2,26 @@
 """Prüft eine Migration ALT -> NEU gegen die Testdaten (aufgerufen von migrate.sh).
 
 Verglichen werden die Vergleichsdateien von test.sh (Stand vor der Migration)
-mit einer DB, die nach der Migration per "collect --live" geschrieben wurde:
+mit einer DB, die per "collect --live" geschrieben wurde. --stage wählt, was
+gelten muss:
 
-1. Effektive Rechte: genau expected.csv, nur dass ALT jetzt NEU heißt. Hatte
-   NEU an einem Pfad schon Rechte, gelten die Bits beider (verodert).
-2. ALT steht in keiner ACL mehr, weder als Besitzer noch als Eintrag.
-3. Jede ACL, in der ALT vorkam, wurde geändert und enthält NEU.
-4. Alle anderen Pfade sind Wort für Wort unverändert.
-
-Mit --restored (nach dem Zurückdrehen) gilt stattdessen: Rechte und ACLs
-sind genau wie in den Testdaten.
+  added     nach Phase 1 (add ALT NEU): beide clientids greifen.
+            - ALT hat genau die Rechte wie vorher, NEU an jedem Pfad von ALT
+              mindestens dieselben (verodert mit eigenen Rechten von NEU).
+            - Es gibt nur einen Besitzer, und der bleibt: War ALT Besitzer,
+              ist es weiter ALT. NEU steht dort als Eintrag mit den Rechten
+              des Besitzers (mindestens 3).
+            - Außer den Einträgen von NEU ist jede ACL Wort für Wort gleich,
+              NEU steht genau einmal da.
+  replaced  nach Phase 2 (replace ALT NEU) oder direktem replace:
+            - Effektive Rechte genau wie vorher, nur heißt ALT jetzt NEU. Hatte
+              NEU an einem Pfad schon Rechte, gelten die Bits beider.
+            - ALT steht in keiner ACL mehr, weder als Besitzer noch als Eintrag.
+            - War ALT Besitzer, ist jetzt NEU Besitzer, sonst bleibt der
+              Besitzer. NEU steht höchstens einmal als Eintrag da, als
+              Besitzer nur mit Bits über 3.
+            - Pfade ohne ALT sind Wort für Wort unverändert.
+  restored  nach dem Zurückdrehen: Rechte und ACLs genau wie in den Testdaten.
 
 Exit-Code 0, wenn alles stimmt, sonst 1.
 """
@@ -23,16 +33,29 @@ import csv
 import sqlite3
 import sys
 from pathlib import Path
+from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from hdfs.acl import Acl, split_token  # noqa: E402
+from hdfs.acl import OWNER_PERM, Acl, covers, split_token  # noqa: E402
 
 
-def principals(raw: str) -> set:
-    """Besitzer und alle Einträge einer Roh-ACL."""
+def principals(raw: Optional[str]) -> set:
+    """Besitzer und alle Einträge einer Roh-ACL (leer ohne ACL)."""
+    if raw is None:
+        return set()
     acl = Acl.parse(raw)
     return {acl.owner} | {split_token(token)[0] for token in acl.tokens}
+
+
+def entries_of(acl: Acl, principal: str) -> list:
+    """Bits aller Einträge von principal."""
+    return [perm for p, perm in map(split_token, acl.tokens) if p == principal]
+
+
+def without(acl: Acl, principal: str) -> Acl:
+    """Die ACL ohne die Einträge von principal (Besitzer bleibt)."""
+    return Acl(acl.owner, [t for t in acl.tokens if split_token(t)[0] != principal])
 
 
 def read_csv(path: Path) -> list:
@@ -40,20 +63,68 @@ def read_csv(path: Path) -> list:
         return list(csv.DictReader(file, delimiter=";"))
 
 
+def want_rights(expected: list, stage: str, old: str, new: str) -> dict:
+    """Erwartete effektive Rechte {(pfad, clientid): (recht, acl_von)}."""
+    rights = {}
+
+    def grant(path: str, clientid: str, perm: int, acl_from: str) -> None:
+        rights[(path, clientid)] = (perm | rights.get((path, clientid), (0, None))[0], acl_from)
+
+    for row in expected:
+        path, clientid, perm, acl_from = row["path"], row["clientid"], int(row["perm"]), row["acl_from"]
+        if stage == "replaced" and clientid == old:
+            grant(path, new, perm, acl_from)  # ALT heißt jetzt NEU
+        else:
+            grant(path, clientid, perm, acl_from)
+            if stage == "added" and clientid == old:
+                grant(path, new, perm, acl_from)  # NEU bekommt zusätzlich die Rechte von ALT
+    return rights
+
+
+def check_added(before: Acl, after: Acl, old: str, new: str) -> list:
+    errors = []
+    if after.owner != before.owner:
+        errors.append(f"Besitzer {after.owner}, muss {before.owner} bleiben")
+    if without(after, new) != without(before, new):
+        errors.append(f"außer den Einträgen von {new} hat sich etwas geändert")
+    perms = entries_of(after, new)
+    if after.owner == new:
+        # NEU war schon Besitzer: ein Eintrag nur für Bits über 3
+        if len(perms) > 1 or (perms and covers(OWNER_PERM, perms[0])):
+            errors.append(f"Einträge {new}={perms} neben Besitzer {new}")
+    elif len(perms) != 1:
+        errors.append(f"{new} steht {len(perms)}-mal als Eintrag da, erwartet einmal")
+    elif before.owner == old and not covers(perms[0], OWNER_PERM):
+        errors.append(f"{new}={perms[0]} hat nicht die Rechte des Besitzers {old} ({OWNER_PERM})")
+    return errors
+
+
+def check_replaced(before: Acl, after: Acl, old: str, new: str) -> list:
+    errors = []
+    if old in principals(after.render()):
+        errors.append(f"{old} steht noch drin")
+    want_owner = new if before.owner == old else before.owner
+    if after.owner != want_owner:
+        errors.append(f"Besitzer {after.owner}, erwartet {want_owner}")
+    perms = entries_of(after, new)
+    if len(perms) > 1:
+        errors.append(f"{new} steht {len(perms)}-mal als Eintrag da")
+    if after.owner == new and perms and covers(OWNER_PERM, perms[0]):
+        errors.append(f"überflüssiger Eintrag {new}={perms[0]} neben Besitzer {new}")
+    return errors
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--stage", choices=["added", "replaced", "restored"], required=True)
     parser.add_argument("--old", help="clientid vor der Migration")
     parser.add_argument("--new", help="clientid nach der Migration")
-    parser.add_argument("--restored", action="store_true",
-                        help="Stand muss genau den Testdaten entsprechen")
     parser.add_argument("--acls", type=Path, required=True, help="acls.csv von test.sh")
     parser.add_argument("--expected", type=Path, required=True, help="expected.csv von test.sh")
-    parser.add_argument("--db", type=Path, required=True, help="DB nach der Migration (collect --live)")
+    parser.add_argument("--db", type=Path, required=True, help="DB von collect --live")
     args = parser.parse_args()
-    if args.restored:
-        args.old = args.new = None
-    elif not (args.old and args.new):
-        parser.error("--old und --new angeben, oder --restored")
+    if args.stage != "restored" and not (args.old and args.new):
+        parser.error(f"--stage {args.stage} braucht --old und --new")
 
     con = sqlite3.connect(args.db)
     actual_acl = dict(con.execute("SELECT path, acl FROM node"))
@@ -62,47 +133,53 @@ def main() -> int:
 
     errors = []
 
-    # 1. effektive Rechte: ALT in NEU umbenennen, doppelte Einträge verodern
-    want_rights = {}
-    for row in read_csv(args.expected):
-        clientid = args.new if row["clientid"] == args.old else row["clientid"]
-        key = (row["path"], clientid)
-        perm = int(row["perm"]) | want_rights.get(key, (0, None))[0]
-        want_rights[key] = (perm, row["acl_from"])
-    for key in sorted(want_rights.keys() | actual_rights.keys()):
-        want, got = want_rights.get(key), actual_rights.get(key)
+    # effektive Rechte
+    wanted = want_rights(read_csv(args.expected), args.stage, args.old, args.new)
+    for key in sorted(wanted.keys() | actual_rights.keys()):
+        want, got = wanted.get(key), actual_rights.get(key)
         if want != got:
             errors.append(f"Recht {key[0]} {key[1]}: erwartet {want}, ist {got}")
 
-    # 2.-4. Roh-ACLs
-    migrated = unchanged = 0
+    # Roh-ACLs
+    touched = unchanged = owned = 0
     for row in read_csv(args.acls):
         path, before = row["path"], row["acl"] or None
         if path not in actual_acl:
-            errors.append(f"{path}: fehlt nach der Migration")
+            errors.append(f"{path}: fehlt")
             continue
         after = actual_acl[path]
-        if args.old and after is not None and args.old in principals(after):
-            errors.append(f"{path}: {args.old} steht noch in {after!r}")
-        if args.old and before is not None and args.old in principals(before):
-            migrated += 1
-            if after is None or after == before or args.new not in principals(after):
-                errors.append(f"{path}: nicht migriert, {before!r} -> {after!r}")
-        else:
+        if args.stage == "restored" or args.old not in principals(before):
             unchanged += 1
             if after != before:
                 errors.append(f"{path}: hätte sich nicht ändern dürfen, {before!r} -> {after!r}")
+            continue
+        touched += 1
+        if after is None or after == before:
+            # bei add zulässig, wenn NEU dort schon alle Rechte von ALT hatte
+            # (das prüft der Vergleich der effektiven Rechte oben)
+            if not (args.stage == "added" and args.new in principals(before)):
+                errors.append(f"{path}: nicht geändert, {before!r}")
+            continue
+        acl_before, acl_after = Acl.parse(before), Acl.parse(after)
+        owned += acl_before.owner == args.old
+        check = check_added if args.stage == "added" else check_replaced
+        errors += [f"{path}: {error}, {before!r} -> {after!r}"
+                   for error in check(acl_before, acl_after, args.old, args.new)]
 
     def paths_of(rights: dict, clientid: str) -> int:
         return sum(c == clientid for _, c in rights)
 
-    if args.restored:
+    if args.stage == "restored":
         print(f"  {unchanged} Pfade, {len(actual_rights)} Rechte verglichen")
     else:
-        print(f"  {migrated} ACLs enthielten {args.old}, {unchanged} Pfade ohne {args.old}")
-        print(f"  {args.new} hat Rechte an {paths_of(actual_rights, args.new)} Pfaden "
-              f"(erwartet {paths_of(want_rights, args.new)}), "
-              f"{args.old} an {paths_of(actual_rights, args.old)}")
+        print(f"  {touched} ACLs mit {args.old} (davon {owned}-mal Besitzer), "
+              f"{unchanged} Pfade ohne {args.old} unverändert")
+        print(f"  {args.old} hat Rechte an {paths_of(actual_rights, args.old)} Pfaden "
+              f"(erwartet {paths_of(wanted, args.old)}), "
+              f"{args.new} an {paths_of(actual_rights, args.new)} (erwartet {paths_of(wanted, args.new)})")
+        owners = {clientid: sum(Acl.parse(a).owner == clientid for a in actual_acl.values() if a)
+                  for clientid in (args.old, args.new)}
+        print(f"  Besitzer: {args.old} an {owners[args.old]} ACLs, {args.new} an {owners[args.new]}")
     for error in errors[:50]:
         print(f"  FEHLER {error}", file=sys.stderr)
     if len(errors) > 50:

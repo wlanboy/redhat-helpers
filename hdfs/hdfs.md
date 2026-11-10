@@ -426,6 +426,13 @@ Ablauf:
      jetzt NEU. Hatte NEU an einem Pfad schon Rechte, gelten die Bits beider.
    - ALT steht in keiner ACL mehr, weder als Besitzer noch als Eintrag.
    - Jede ACL mit ALT wurde geändert und enthält NEU.
+   - Besitzerwechsel: War ALT Besitzer, ist jetzt NEU Besitzer, sonst
+     bleibt der Besitzer. NEU steht höchstens einmal als Eintrag da, als
+     Besitzer nur mit Bits über `3`. Bei `@client3` sind das 22 der 73
+     ACLs, darunter „nur Besitzer“ (`@client3|`), „Besitzer zusätzlich
+     mit `=1` gelistet“ und „Besitzer mit `=8`“. Die effektiven Rechte
+     allein reichen hier nicht: `hans|...,@newapp=3` statt `@newapp|...`
+     gäbe `@newapp` dieselben Rechte.
    - Alle anderen Pfade sind Wort für Wort unverändert.
 5. Alle Backups rückwärts mit `restore` zurückspielen. Danach müssen Rechte
    und ACLs genau den Testdaten entsprechen (`migrate_check.py --restored`).
