@@ -33,6 +33,21 @@ def base_dir(value: str) -> str:
     return value
 
 
+def owner_id(value: str) -> str:
+    """Neuer Besitzer von der Kommandozeile: #gruppe oder clientid.
+
+    Ohne Präfix wird wie überall ein '@' ergänzt. "newapp" als User zum
+    Besitzer zu machen wäre ein naheliegender Tippfehler, der die clientid
+    aussperrt; User als neuer Besitzer gehen deshalb nicht.
+    """
+    value = value.strip()
+    if value.startswith("#"):
+        if not re.fullmatch(r"#[^\s|,=#@]+", value):
+            raise UsageError(f"Ungültige Gruppe '{value}'.")
+        return value
+    return client_id(value)
+
+
 def refresh(args: argparse.Namespace, hdfs: Hdfs) -> tuple:
     """Stand einlesen und die DB neu schreiben; liefert ({pfad: roh_acl oder None}, quelle).
 
@@ -72,9 +87,9 @@ def recheck(args: argparse.Namespace, hdfs: Hdfs, nodes: dict, paths: list) -> d
         if path in live:
             nodes[path] = live[path]
         else:
-            nodes.pop(path, None)  # gelöscht oder nicht lesbar: nicht anfassen
+            nodes.pop(path, None)  # gelöscht: nicht anfassen (andere Fehler brechen ab)
     info(f"{len(paths)} betroffene Pfade live nachgelesen: {changed} seitdem geändert, "
-         f"{len(paths) - len(live)} fehlen")
+         f"{len(paths) - len(live)} gelöscht")
     return nodes
 
 
@@ -110,7 +125,9 @@ def execute(args: argparse.Namespace, hdfs: Hdfs, label: str, changes: list,
 
     # Nachprüfen: der Exit-Code von setfattr allein reicht nicht, gelesen wird
     # der tatsächliche Wert. Nebenbei kommt die DB auf den neuen Stand.
-    live = hdfs.read_paths([c.path for c in changes], args.attr)
+    # strict=False: nach dem Schreiben nicht abbrechen, ein nicht lesbarer Pfad
+    # zählt unten als Fehler, und die DB bekommt trotzdem die gelesenen Werte
+    live = hdfs.read_paths([c.path for c in changes], args.attr, strict=False)
     mismatches = [c for c in changes if c.path not in live or live[c.path] != c.new]
     for change in mismatches:
         actual = repr(live[change.path]) if change.path in live else "(nicht lesbar)"
@@ -263,10 +280,9 @@ def cmd_replace(args: argparse.Namespace) -> int:
 
 def cmd_remove(args: argparse.Namespace) -> int:
     clientid = client_id(args.clientid)
-    new_owner = args.new_owner.strip() if args.new_owner else None
-    # neuer Besitzer darf auch User oder #gruppe sein, nur keine Trennzeichen
-    if new_owner is not None and not re.fullmatch(r"[^\s|,=]+", new_owner):
-        raise UsageError(f"Ungültiger Besitzer '{new_owner}'.")
+    new_owner = owner_id(args.new_owner) if args.new_owner else None
+    if new_owner == clientid:
+        raise UsageError(f"--new-owner {new_owner} ist die clientid, die entfernt werden soll.")
     hdfs = Hdfs(args.parallel, args.hadoop_version)
     nodes, origin = refresh(args, hdfs)
     changes, owned = plan_remove(nodes, clientid, new_owner)
