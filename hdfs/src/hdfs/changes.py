@@ -110,7 +110,11 @@ def plan_remove(nodes: dict, clientid: str, new_owner: Optional[str]) -> tuple:
     Eine ACL braucht einen Besitzer. Ist clientid Besitzer, wird er durch
     new_owner ersetzt; ohne new_owner bleibt der Pfad unverändert und landet
     in owned, damit der Aufrufer ihn melden kann. Liefert (changes, owned).
+    new_owner == clientid ist sinnlos (die Bits über 3 gingen verloren) und
+    wird abgelehnt.
     """
+    if new_owner == clientid:
+        raise ValueError(f"neuer Besitzer {new_owner} ist die zu entfernende clientid")
     changes = []
     owned = []
     for path, raw in nodes.items():
@@ -147,9 +151,12 @@ def plan_restore(nodes: dict, backup: list, force: bool) -> tuple:
             conflicts.append(f"{entry.path}: existiert nicht mehr oder ist nicht lesbar")
             continue
         current = nodes[entry.path]
+        if current == entry.old:
+            # schon zurückgesetzt (zweites restore) oder nie geschrieben
+            # (Teilfehler beim Schreiben): nichts zu tun, kein Konflikt
+            continue
         if current != entry.new and not force:
             conflicts.append(f"{entry.path}: wurde seit dem Backup geändert ({current!r})")
             continue
-        if current != entry.old:
-            changes.append(Change(entry.path, current, entry.old))
+        changes.append(Change(entry.path, current, entry.old))
     return changes, conflicts
