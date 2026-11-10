@@ -57,7 +57,10 @@ Streams und lassen sich ohne HDFS testen.
 Für den HDFS-Client gelten dieselben Variablen wie bei `test.sh`
 (`HADOOP_REPO`, `HADOOP_VERSION`, `HADOOP_HOME`, `HADOOP_CONF_DIR`,
 `HDFS_JAVA_HOME`), siehe unten. `HADOOP_VERSION` gibt es auch als Option
-`--hadoop-version`.
+`--hadoop-version`. Fehlt `$HADOOP_CONF_DIR/core-site.xml`, bricht das Tool
+ab: ohne die Datei liest der Client das lokale Dateisystem (`file:///`).
+Wer `HADOOP_HOME` setzt, muss `HADOOP_CONF_DIR` meist ebenfalls setzen, der
+Default bleibt `$HADOOP_REPO/clientconfig`.
 
 ### fsimage besorgen
 
@@ -162,7 +165,10 @@ des letzten `collect`, Zeitpunkt und Quelle stehen auf stderr.
 2. Die Pfade, die der Plan ändern würde, **live nachlesen** und auf deren
    aktuellen Werten neu planen. Das fsimage kann eine Stunde alt sein:
    Pfade, die sich seitdem geändert haben, werden so richtig behandelt,
-   gelöschte übersprungen. `restore` liest die Pfade aus dem Backup immer
+   gelöschte übersprungen. Jeder andere Lesefehler bricht ab (keine
+   Berechtigung, Kerberos-Ticket abgelaufen, NameNode nicht erreichbar),
+   damit ein nicht lesbarer Pfad nicht still aus dem Plan fällt.
+   `restore` liest die Pfade aus dem Backup immer
    live, das fsimage kennt die zurückzudrehenden Änderungen meist noch nicht.
 3. Für jeden betroffenen Pfad alt/neu zeigen und **erst mit `--apply`**
    schreiben. Vorher entsteht neben der DB ein Backup
@@ -219,6 +225,12 @@ braucht. Bleibt nach dem Entfernen nur der Besitzer übrig, wird die ACL zu
 gilt dort nicht. Mit `--new-owner` entfallen die Einträge des neuen
 Besitzers, wenn er als Besitzer ohnehin alle ihre Bits hat (Maske in `3`).
 
+`--new-owner` nimmt eine clientid oder eine `#gruppe`. Ohne Präfix wird wie
+bei allen clientids ein `@` ergänzt: `--new-owner newapp` meint `@newapp`,
+nicht den User `newapp`. Ein User als neuer Besitzer geht nicht. Die
+clientid selbst als neuer Besitzer (`remove @a --new-owner @a`) wird
+abgelehnt, ihre Bits über `3` gingen sonst verloren.
+
 Migration in zwei Schritten (erst ergänzen, Anwendung umstellen, dann
 aufräumen):
 
@@ -240,6 +252,9 @@ hdfs-acl restore hdfs-acl-backup-20261015-152310-add-newapp.csv --apply
 `restore` setzt nur Pfade zurück, deren aktueller Wert noch dem `new` aus
 dem Backup entspricht. Pfade, die seitdem jemand anders geändert hat, werden
 übersprungen und gemeldet (Exit-Code 2). `--force` setzt sie trotzdem zurück.
+Pfade, die schon den alten Wert haben, lässt `restore` stillschweigend aus.
+Ein zweites `restore` desselben Backups ist deshalb unschädlich, ebenso ein
+`restore` nach einem Teilfehler beim Schreiben.
 
 Gemeinsame Optionen: `--db` (`$HDFS_ACL_DB`, Default `./hdfs-acl.db`),
 `--base-dir` (`$BASE_DIR`), `--attr` (`$ACL_ATTR`), `--fsimage`
@@ -299,7 +314,20 @@ erwarteten Werten.
 ./test.sh                # anlegen/überschreiben ohne vorher zu löschen
 ./test.sh --verify-only  # nur HDFS gegen testdata/acls.csv prüfen
 ./test.sh --dry-run      # nur testdata/*.csv erzeugen, HDFS nicht anfassen
+./test.sh --docker       # eigener NameNode per Docker, dazu hdfs-acl-Tests (~4 min)
 ```
+
+`--docker` braucht keinen Testcluster. Das Skript startet mit `docker run`
+einen frischen NameNode aus `apache/hadoop:$HADOOP_VERSION` (`DOCKER_IMAGE`),
+ohne DataNodes, weil es nur um Metadaten geht. Die Konfiguration liegt in
+`namenode/` und gilt für den NameNode im Container und den Client auf dem Host
+(`localhost:19000`, Web-UI `localhost:19870`), `HADOOP_CONF_DIR` wird dabei
+ignoriert. Nach dem Anlegen und Prüfen der Testdaten testet das Skript
+`hdfs-acl` durchgängig: `collect` aus dem fsimage und `--live` gegen
+`expected.csv`, Abbruch bei Lesefehlern beim Nachlesen und ohne
+`core-site.xml`, `--new-owner`, `remove`/`add` mit jeweils zwei `restore`.
+Am Ende muss HDFS wieder genau `acls.csv` entsprechen. Container und
+Arbeitsordner werden danach gelöscht, mit `--keep` bleiben sie stehen.
 
 Basisordner und Attributname sind per Umgebungsvariable einstellbar:
 
