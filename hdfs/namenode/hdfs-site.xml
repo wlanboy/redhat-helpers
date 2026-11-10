@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<!-- Einzelner NameNode ohne DataNodes für test.sh --docker. Er lauscht im
+<!-- Einzelner NameNode ohne DataNodes für test.sh (Option docker). Er lauscht im
      Container auf 0.0.0.0 (bind-host), der Client auf dem Host spricht ihn
      über die veröffentlichten Ports auf localhost an. Andere Ports als der
      Testcluster (8020/9870), beide können gleichzeitig laufen. -->

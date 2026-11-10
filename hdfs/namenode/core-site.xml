@@ -1,5 +1,5 @@
 <?xml version="1.0"?>
-<!-- Einzelner NameNode für test.sh --docker. Dieselbe Datei nutzen der
+<!-- Einzelner NameNode für test.sh (Option docker). Dieselbe Datei nutzen der
      NameNode im Container und der Client auf dem Host. -->
 <configuration>
   <property><name>fs.defaultFS</name><value>hdfs://localhost:19000</value></property>
