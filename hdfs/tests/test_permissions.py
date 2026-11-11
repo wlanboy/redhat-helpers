@@ -26,9 +26,10 @@ CUSTOM = {
 class DescribeParseTest(unittest.TestCase):
     def test_default_describe(self):
         self.assertEqual(DEFAULT.describe(1), "READ")
-        self.assertEqual(DEFAULT.describe(3), "READ+WRITE")
-        self.assertEqual(DEFAULT.describe(19), "READ+WRITE+ADMINISTRATION")
-        self.assertEqual(DEFAULT.describe(35), "READ+WRITE+32")
+        self.assertEqual(DEFAULT.describe(3), "READ_WRITE")
+        self.assertEqual(DEFAULT.describe(19), "ADMIN")
+        self.assertEqual(DEFAULT.describe(27), "ADMIN+8")
+        self.assertEqual(DEFAULT.describe(35), "READ_WRITE+32")
         self.assertEqual(DEFAULT.describe(32), "32")
 
     def test_combined_name_wins(self):
@@ -40,8 +41,8 @@ class DescribeParseTest(unittest.TestCase):
         self.assertEqual(Permissions().describe(3), "")
 
     def test_parse(self):
-        for value, mask in (("3", 3), ("READ", 1), ("read+write", 3), ("READ|16", 17),
-                            ("WRITE, DELETE", 10), (16, 16)):
+        for value, mask in (("3", 3), ("READ", 1), ("read_write", 3), ("READ|16", 17),
+                            ("READ_WRITE, 16", 19), ("admin", 19), (16, 16)):
             with self.subTest(value=value):
                 self.assertEqual(DEFAULT.parse(value), mask)
 
@@ -58,7 +59,7 @@ class LoadTest(unittest.TestCase):
 
     def test_defaults_for_owner_admin(self):
         table = from_dict({"permissions": {"R": 1}}, "test")
-        self.assertEqual((table.owner, table.admin), (3, 16))
+        self.assertEqual((table.owner, table.admin), (19, 19))
 
     def test_invalid(self):
         for data in (
@@ -111,7 +112,7 @@ class ActiveTableTest(unittest.TestCase):
         self.assertEqual(Acl.parse("@a|@b=1").client_rights(), {"@b": (1, False), "@a": (7, True)})
 
     def test_add_uses_admin(self):
-        changes, _ = plan_add({"/fs/a": "@old|@x=1"}, "@old", "@new")
+        changes, _, _ = plan_add({"/fs/a": "@old|@x=1"}, "@old", "@new")
         self.assertEqual(changes[0].new, "@old|@x=1,@new=71")
 
 
@@ -132,10 +133,11 @@ class CommandTest(unittest.TestCase):
         return rc, out.getvalue(), err.getvalue()
 
     def test_search_by_name(self):
-        rc, out, _ = self.run_main("search", "@*", "--has-bits", "ADMINISTRATION", "--format", "csv")
+        rc, out, _ = self.run_main("search", "@*", "--has-bits", "ADMIN", "--format", "csv")
         self.assertEqual(rc, 0)
-        self.assertIn("/fs/a;@client3;19;READ+WRITE+ADMINISTRATION;0;/fs/a", out)
-        self.assertNotIn("@client1", out)
+        self.assertIn("/fs/a;@client3;19;ADMIN;0;/fs/a", out)
+        self.assertIn("/fs/a;@client1;19;ADMIN;1;/fs/a", out)  # Besitzer hat 19
+        self.assertNotIn("@client2", out)
         _, out, _ = self.run_main("search", "@*", "--perm", "read", "--format", "csv")
         self.assertEqual(len(out.splitlines()), 3)  # Kopf + /fs/a und /fs/a/c von @client2
 
@@ -148,7 +150,7 @@ class CommandTest(unittest.TestCase):
         table = self.dir / "custom.json"
         table.write_text(json.dumps({"permissions": {"LESEN": 1, "VOLL": 3}}))
         _, out, _ = self.run_main("show", "/fs/a", "--permissions", str(table))
-        self.assertIn("@client1=3 [VOLL] (Besitzer)", out)
+        self.assertIn("@client1=19 [VOLL+16] (Besitzer)", out)
         self.assertIn("@client2=1 [LESEN]", out)
         self.assertIn("@client3=19 [VOLL+16]", out)
 
@@ -156,7 +158,7 @@ class CommandTest(unittest.TestCase):
         table = self.dir / "permissions.json"  # neben der DB: wird automatisch genommen
         table.write_text(json.dumps({"owner": 7}))
         _, _, err = self.run_main("show", "/fs/a")
-        self.assertIn("eingesammelt mit Besitzer-Recht 3", err)
+        self.assertIn("eingesammelt mit Besitzer-Recht 19", err)
 
 
 if __name__ == "__main__":

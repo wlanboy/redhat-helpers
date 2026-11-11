@@ -22,7 +22,7 @@ TESTDATA = Path(__file__).resolve().parent.parent / "testdata"
 NODES = {
     "/fs/account1": "@client3|@test1=1,@test2=2",
     "/fs/account1/container1": None,
-    "/fs/account1/container2": "@o|@client3=1,#ops=3",
+    "/fs/account1/container2": "@o|@client3=1,.cn=ops,ou=groups,dc=firma=3",
     "/fs/account2": "@o|@x=1",
 }
 
@@ -80,7 +80,7 @@ class CommandTest(unittest.TestCase):
         rc, out, _ = self.run_main("add", "@client3", "@newapp", "--live", "--apply")
         self.assertEqual(rc, 0, out)
         self.assertIn("OK: 2 Pfade geändert und geprüft.", out)
-        self.assertEqual(self.hdfs.nodes["/fs/account1/container2"], "@o|@client3=1,#ops=3,@newapp=1")
+        self.assertEqual(self.hdfs.nodes["/fs/account1/container2"], "@o|@client3=1,.cn=ops,ou=groups,dc=firma=3,@newapp=1")
         self.assertEqual(len(self.backups()), 1)
         # danach nichts mehr zu tun
         rc, out, _ = self.run_main("add", "@client3", "@newapp", "--live")
@@ -97,7 +97,7 @@ class CommandTest(unittest.TestCase):
         text = script.read_text()
         self.assertIn("# hdfs-acl add-newapp: 2 Pfade", text)
         self.assertIn("-setfattr -n user.acl -v '\"@client3|@test1=1,@test2=2,@newapp=19\"' /fs/account1 ", text)
-        self.assertIn("-setfattr -n user.acl -v '\"@o|@client3=1,#ops=3,@newapp=1\"' /fs/account1/container2 ", text)
+        self.assertIn("-setfattr -n user.acl -v '\"@o|@client3=1,.cn=ops,ou=groups,dc=firma=3,@newapp=1\"' /fs/account1/container2 ", text)
         self.assertEqual(text.count('"$HADOOP" fs'), 2)
 
         # das Backup passt zum Skript, restore dreht es nach dem Ausführen zurück
@@ -140,13 +140,17 @@ class CommandTest(unittest.TestCase):
         rc, _out, err = self.run_main("remove", "@client3", "--live", "--apply")
         self.assertEqual(rc, 2)
         self.assertIn("ist Besitzer von 1 Pfaden", err)
-        self.assertEqual(self.hdfs.nodes["/fs/account1/container2"], "@o|#ops=3")
+        self.assertEqual(self.hdfs.nodes["/fs/account1/container2"], "@o|.cn=ops,ou=groups,dc=firma=3")
         self.assertEqual(self.hdfs.nodes["/fs/account1"], NODES["/fs/account1"])
 
     def test_remove_with_new_owner(self):
-        rc, _, _ = self.run_main("remove", "@client3", "--new-owner", "#admins", "--live", "--apply")
+        admins = ".cn=admins,ou=groups,dc=firma"
+        rc, _, _ = self.run_main("remove", "@client3", "--new-owner", admins, "--live", "--apply")
         self.assertEqual(rc, 0)
-        self.assertEqual(self.hdfs.nodes["/fs/account1"], "#admins|@test1=1,@test2=2")
+        self.assertEqual(self.hdfs.nodes["/fs/account1"], f"{admins}|@test1=1,@test2=2")
+        rc, _, err = self.run_main("remove", "@client3", "--new-owner", "#admins", "--live")
+        self.assertEqual(rc, 1)
+        self.assertIn("Gruppen beginnen mit '.'", err)
 
     def test_usage_errors(self):
         rc, _, err = self.run_main("add", "@a", "a", "--live")
@@ -171,7 +175,7 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(len(out.splitlines()), 2)
 
         _, out, _ = self.run_main("clients", "--format", "csv")
-        self.assertIn("@client3;3;1:1 3:2;2;2", out)
+        self.assertIn("@client3;3;1:1 19:2;2;2", out)
 
         rc, out, _ = self.run_main("count", "--format", "csv")
         self.assertEqual(rc, 0)
@@ -182,7 +186,7 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(counts["clientids"], 5)
 
         _, out, _ = self.run_main("show", "/fs/account1/container1/")
-        self.assertIn("geerbt von /fs/account1", out)
+        self.assertIn("Erbt:    @client3|@test1=1,@test2=2  (von /fs/account1)", out)
         rc, _, err = self.run_main("show", "/fs/gibtsnicht")
         self.assertEqual(rc, 1)
         self.assertIn("nicht eingesammelt", err)
@@ -206,9 +210,10 @@ class HelpersTest(unittest.TestCase):
 
     def test_owner_id(self):
         self.assertEqual(owner_id("newapp"), "@newapp")
-        self.assertEqual(owner_id("#admins"), "#admins")
-        with self.assertRaises(UsageError):
-            owner_id("#ad,mins")
+        self.assertEqual(owner_id(".cn=admins,ou=groups,dc=firma"), ".cn=admins,ou=groups,dc=firma")
+        for bad in ("#admins", ".cn=ad|mins", ".admins"):
+            with self.subTest(value=bad), self.assertRaises(UsageError):
+                owner_id(bad)
 
 
 if __name__ == "__main__":

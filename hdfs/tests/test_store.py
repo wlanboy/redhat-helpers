@@ -16,10 +16,12 @@ from hdfs.output import output
 from hdfs.store import open_db, read_backup, save, write_backup
 
 NODES = {
-    "/fs/account1": "@client1|@client2=3,svc=1,#ops=3,cn=doc,ou=x",
+    "/fs/account1": "@client1|@client2=3,svc=1,.cn=ops,ou=groups,dc=firma=3,cn=doc,ou=x",
     "/fs/account1/container1": None,
-    "/fs/account1/container2": "@client4|@client1=16",
+    "/fs/account1/container2": "@client4|@client1=16,@client2=1",
+    "/fs/account1/container3": "|@client5=1",
     "/fs/account2": None,
+    "/fs/account2/container1": "|@client6=1",
     "/fs/account3": "kaputt",
 }
 
@@ -43,20 +45,29 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(node["/fs/account1/container1"], ("/fs/account1", 2, "/fs/account1"))
         self.assertEqual(node["/fs/account2"], (None, 1, None))
         problems = dict(con.execute("SELECT path, problems FROM node WHERE problems IS NOT NULL"))
-        self.assertEqual(list(problems), ["/fs/account3"])
+        # leerer Besitzer ohne geerbten ist eine Warnung, mit geerbtem nicht
+        self.assertEqual(problems, {"/fs/account2/container1": "kein Besitzer (auch nicht geerbt)",
+                                    "/fs/account3": "kein '|' zwischen Besitzer und Einträgen"})
 
         entries = set(con.execute("SELECT principal, kind, perm, owner FROM entry WHERE path = '/fs/account1'"))
-        self.assertEqual(entries, {("@client1", "client", 3, 1), ("@client2", "client", 3, 0),
-                                   ("svc", "user", 1, 0), ("#ops", "group", 3, 0)})
+        self.assertEqual(entries, {("@client1", "client", 19, 1), ("@client2", "client", 3, 0),
+                                   ("svc", "user", 1, 0), (".cn=ops,ou=groups,dc=firma", "group", 3, 0)})
 
         effective = set(con.execute("SELECT path, clientid, perm, owner, acl_from FROM effective"))
         self.assertEqual(effective, {
-            ("/fs/account1", "@client1", 3, 1, "/fs/account1"),
+            ("/fs/account1", "@client1", 19, 1, "/fs/account1"),
             ("/fs/account1", "@client2", 3, 0, "/fs/account1"),
-            ("/fs/account1/container1", "@client1", 3, 1, "/fs/account1"),
+            ("/fs/account1/container1", "@client1", 19, 1, "/fs/account1"),
             ("/fs/account1/container1", "@client2", 3, 0, "/fs/account1"),
-            ("/fs/account1/container2", "@client4", 3, 1, "/fs/account1/container2"),
+            # eigener Besitzer, @client2 eingeschränkt
+            ("/fs/account1/container2", "@client4", 19, 1, "/fs/account1/container2"),
             ("/fs/account1/container2", "@client1", 16, 0, "/fs/account1/container2"),
+            ("/fs/account1/container2", "@client2", 1, 0, "/fs/account1/container2"),
+            # Besitzer geerbt, erweitert um @client5
+            ("/fs/account1/container3", "@client1", 19, 1, "/fs/account1"),
+            ("/fs/account1/container3", "@client2", 3, 0, "/fs/account1"),
+            ("/fs/account1/container3", "@client5", 1, 0, "/fs/account1/container3"),
+            ("/fs/account2/container1", "@client6", 1, 0, "/fs/account2/container1"),
         })
 
     def test_save_replaces_db(self):
