@@ -319,7 +319,8 @@ Ein zweites `restore` desselben Backups ist deshalb unschädlich, ebenso ein
 `restore` nach einem Teilfehler beim Schreiben.
 
 Gemeinsame Optionen: `--db` (`$HDFS_ACL_DB`, Default `./hdfs-acl.db`),
-`--base-dir` (`$BASE_DIR`), `--attr` (`$ACL_ATTR`), `--fsimage`
+`--base-dir` (`$BASE_DIR`), `--attr` (`$ACL_ATTR`), `--depth` (`$DEPTH`,
+Default 2), `--fsimage`
 (`$HDFS_FSIMAGE`), `--live`, `--parallel` (`$PARALLEL`, Default 8),
 `--hadoop-version` (`$HADOOP_VERSION`, Default 3.4.2).
 
@@ -348,8 +349,11 @@ enthalten. Container, die erben, kosten beim Ändern nichts.
 
 ### Gegen die Testdaten prüfen
 
+Die Testdaten haben drei Ebenen (Unterordner `sub`), deshalb `DEPTH=3`:
+
 ```bash
 ./test.sh --clean
+export DEPTH=3
 python3 src/hdfs/main.py collect --live
 python3 src/hdfs/main.py export | diff - testdata/expected.csv && echo OK
 ```
@@ -367,9 +371,11 @@ python3 src/hdfs/main.py export | diff - testdata/expected.csv && echo OK
 
 ## test.sh – Testdaten anlegen
 
-Legt `/fs/account1..10` mit je `container1..50` an (510 Ordner), setzt an
-409 davon `user.acl` und vergleicht das Ergebnis per `getfattr -R` mit den
-erwarteten Werten.
+Legt `/fs/account1..10` mit je `container1..52` an, unter drei Containern
+je Account einen Unterordner `sub`, dazu `/fs/invalid` mit fehlerhaften
+ACLs (568 Ordner). Setzt an 445 davon `user.acl` und vergleicht das Ergebnis
+per `getfattr -R` mit den erwarteten Werten. `hdfs-acl` läuft in den Tests
+mit `DEPTH=3`.
 
 ```bash
 ./test.sh --clean        # /fs löschen, neu anlegen, ACLs setzen, prüfen (~3 min)
@@ -460,6 +466,25 @@ immer identisch.
 | c%5=4                | `#admins\|peter=3,#ops=1`                         | keine Client-ID → niemand            |
 | `container48`        | `cl(n+9)\|cl(n+1)=5,#ops=16,cl(n+1)=16,cl(n+9)=8,cn=doc,ou=hell,dc=firma=3,cn=testgroup` | Masken > 3: ODER (21), Besitzer 3\|8=11; LDAP ignoriert |
 | `container49`        | `cl(n+8)\|`                                       | nur Besitzer, keine Einträge         |
+| `container51`        | `cl(n+1)\|cl(n)=1,#ops=1`                         | Migration `cl(n)` → `cl(n+1)`: NEU schon Besitzer |
+| `container52`        | `cl(n)\|cl(n+1)=1`                                | Migration: ALT Besitzer, NEU schon Eintrag |
+| `container1/sub`     | keine                                             | erbt vom Container (3. Ebene)        |
+| `container5/sub`     | keine                                             | erbt über zwei Ebenen vom Account    |
+| `container10/sub`    | `cl(n+2)\|cl(n+3)=1,#ops=3`                       | eigene ACL unter erbendem Container  |
+
+Unter `/fs/invalid` (selbst ohne ACL) liegen fehlerhafte ACLs. `collect`
+meldet sie als Warnung. Ungültige Teile geben keine Rechte, der Rest der
+ACL gilt. Die erwarteten Rechte stehen in `test.sh` von Hand (`acl_invalid`).
+
+| Pfad                 | ACL                                               | Rechte                               |
+|----------------------|---------------------------------------------------|--------------------------------------|
+| `nopipe`             | `@inv1=3`                                         | keine: Besitzer `@inv1=3` ist keine clientid |
+| `noowner`            | `\|@inv2=3,#ops=1`                                | `@inv2=3`                            |
+| `noowner/sub`        | keine                                             | erbt `@inv2=3`                       |
+| `badentry`           | `@inv3\|@inv4,@inv5=abc,=2,@inv6=1`               | `@inv3=3`, `@inv6=1`                 |
+| `range`              | `@inv3\|@inv4=0,@inv5=2147483648,@inv6=2147483647` | `@inv3=3`, `@inv6=2147483647`       |
+| `spaces`             | `@inv3\| @inv4=1 , @inv5 = 1`                     | `@inv3=3`, `@inv4=1` (Leerzeichen um `=` ungültig) |
+| `ldap`               | `@inv3\|uid=hans,CN=Doc,O=firma=1,cn=3,@inv4=1`   | `@inv3=3`, `@inv4=1` (`cn=3` ist User `cn`) |
 
 ## migrate.sh – Migration durchspielen
 
@@ -507,11 +532,14 @@ Ablauf:
 5. Beide Backups rückwärts mit `restore` zurückspielen. Danach müssen Rechte
    und ACLs genau den Testdaten entsprechen (`--stage restored`).
 
-Bei `@client3` ist ALT an 22 der 73 ACLs Besitzer, darunter „nur Besitzer“
+Bei `@client3` ist ALT an 25 der 79 ACLs Besitzer, darunter „nur Besitzer“
 (`@client3|`), „Besitzer zusätzlich mit `=1` gelistet“ und „Besitzer mit
 `=8`“ (NEU bekommt dort in Phase 1 `=11`). Die effektiven Rechte allein
 reichen für die Prüfung nicht: `hans|...,@newapp=3` statt `@newapp|...`
 gäbe `@newapp` dieselben Rechte, deshalb wird der Besitzer eigens geprüft.
+Mit `./migrate.sh @client3 @client4` kommen über `container51/52` beide
+Überschneidungen vor: NEU ist schon Besitzer und ALT nur Eintrag, und
+umgekehrt.
 
 Exit-Code 0, wenn alles stimmt. Es gelten dieselben Umgebungsvariablen wie
 bei `test.sh`, außer `OUT_DIR` und `HADOOP_CONF_DIR`.

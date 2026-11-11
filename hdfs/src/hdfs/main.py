@@ -58,8 +58,9 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Basisordner in HDFS (Default: $BASE_DIR oder /fs)")
     hdfs_opts.add_argument("--attr", default=os.environ.get("ACL_ATTR", "user.acl"),
                            help="Name des xattr (Default: $ACL_ATTR oder user.acl)")
-    hdfs_opts.add_argument("--depth", type=int, default=2,
-                           help="Ebenen unter dem Basisordner (Default 2: Account/Container)")
+    hdfs_opts.add_argument("--depth", type=int, default=int(os.environ.get("DEPTH", "2")),
+                           help="Ebenen unter dem Basisordner (Default: $DEPTH oder 2, "
+                                "Account/Container)")
     hdfs_opts.add_argument("--fsimage", default=os.environ.get("HDFS_FSIMAGE"),
                            help="fsimage-Datei (Default: $HDFS_FSIMAGE oder das neueste "
                                 "fsimage_<txid> im Ordner der DB)")

@@ -27,6 +27,9 @@ ADMIN_PERM = 16
 # Spring speichert die Maske als Java-int, höchstes nutzbares Bit ist 1 << 30
 MAX_PERM = (1 << 31) - 1
 
+# Eine clientid: '@', dann keine Zeichen, die das ACL-Format zerlegen
+CLIENT_ID = re.compile(r"@[^\s|,=#@]+")
+
 # Teil eines LDAP-DN: Attributtyp aus RFC 4514, '=', dann ein Wert, der nicht
 # nur aus Ziffern besteht (sonst wäre "cn=3" ein User "cn" mit Recht 3).
 # Ein DN zerfällt am ',' in mehrere Einträge, der letzte trägt evtl. "=<recht>".
@@ -75,16 +78,21 @@ class Acl:
         return f"{self.owner}|{','.join(self.tokens)}"
 
     def client_rights(self) -> dict:
-        """Effektive Rechte der @clientids: {clientid: (recht, ist_besitzer)}."""
+        """Effektive Rechte der @clientids: {clientid: (recht, ist_besitzer)}.
+
+        Was acl_problems() als Fehler meldet, gibt keine Rechte: Einträge mit
+        Recht außerhalb 1..MAX_PERM und ein Besitzer, der keine gültige clientid
+        ist (z. B. "@a=3" bei fehlendem '|').
+        """
         rights = {}
         # Steht eine clientid mehrfach in der ACL, gelten alle ihre Bits zusammen
         for token in self.tokens:
             principal, perm = split_token(token)
-            if perm is not None and principal.startswith("@"):
+            if perm is not None and 0 < perm <= MAX_PERM and principal.startswith("@"):
                 rights[principal] = (rights.get(principal, (0, False))[0] | perm, False)
         # Der Besitzer hat immer mindestens OWNER_PERM, auch wenn er zusätzlich
         # mit =1 gelistet ist; weitere Bits aus seinen Einträgen kommen dazu
-        if self.owner.startswith("@"):
+        if CLIENT_ID.fullmatch(self.owner):
             rights[self.owner] = (rights.get(self.owner, (0, False))[0] | OWNER_PERM, True)
         return rights
 

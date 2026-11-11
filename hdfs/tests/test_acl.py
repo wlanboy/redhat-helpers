@@ -70,6 +70,13 @@ class AclTest(unittest.TestCase):
     def test_non_client_owner_has_no_rights(self):
         self.assertEqual(Acl.parse("#ops|@a=1").client_rights(), {"@a": (1, False)})
 
+    def test_invalid_parts_give_no_rights(self):
+        # wie acl_problems: ungültige Einträge und Besitzer zählen nicht
+        self.assertEqual(Acl.parse("@a=3").client_rights(), {})
+        self.assertEqual(Acl.parse("|@a=3").client_rights(), {"@a": (3, False)})
+        self.assertEqual(Acl.parse(f"@o|@a=0,@b={2**31},@c={2**31 - 1},@d=x,@e,@f = 1").client_rights(),
+                         {"@o": (3, True), "@c": (2**31 - 1, False)})
+
 
 class AclProblemsTest(unittest.TestCase):
     def test_valid(self):
