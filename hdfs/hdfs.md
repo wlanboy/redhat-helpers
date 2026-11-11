@@ -229,6 +229,7 @@ hdfs-acl search '@*' --has-bits ADMINISTRATION   # dasselbe über den Namen
 hdfs-acl search '@*' --perm read+write  # Namen aus der Rechte-Tabelle
 hdfs-acl search @client3 --format csv   # oder json
 hdfs-acl clients                         # alle clientids mit Anzahl Pfade je Maske ("3:40 19:2")
+hdfs-acl count                           # Anzahl Pfade, ACLs, Einträge, Rechte, clientids in der DB
 hdfs-acl show /fs/account3/container10   # ACL, Herkunft und Rechte eines Pfads
 hdfs-acl export -o export.csv            # Format wie testdata/expected.csv
 ```

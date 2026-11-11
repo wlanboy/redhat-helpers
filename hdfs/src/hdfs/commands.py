@@ -1,6 +1,6 @@
 """Die Kommandos der Kommandozeile, je eine Funktion cmd_<name>(args) -> Exit-Code.
 
-Lesende Kommandos (search, clients, show, export) arbeiten nur auf der DB.
+Lesende Kommandos (search, clients, count, show, export) arbeiten nur auf der DB.
 Ändernde Kommandos (add, replace, remove, restore) laufen alle gleich ab:
     1. refresh():  Stand einlesen (fsimage oder live), DB neu schreiben
     2. plan_*():   Liste Change berechnen (changes.py)
@@ -222,6 +222,28 @@ def cmd_clients(args: argparse.Namespace) -> int:
     ]
     rows.sort(key=lambda r: natural_key(r[0]))
     output(["clientid", "paths", "perms", "owner", "own_acls"], rows, args.format)
+    return 0
+
+
+def cmd_count(args: argparse.Namespace) -> int:
+    con = open_db(Path(args.db))
+    queries = [
+        ("paths", "alle eingesammelten Pfade", "SELECT COUNT(*) FROM node"),
+        ("paths_with_acl", "Pfade mit eigener ACL", "SELECT COUNT(*) FROM node WHERE acl IS NOT NULL"),
+        ("paths_inherited", "Pfade, die eine ACL erben",
+         "SELECT COUNT(*) FROM node WHERE acl_from IS NOT NULL AND acl_from != path"),
+        ("paths_without_acl", "Pfade ohne geltende ACL", "SELECT COUNT(*) FROM node WHERE acl_from IS NULL"),
+        ("paths_with_problems", "ACLs mit Formatfehlern",
+         "SELECT COUNT(*) FROM node WHERE problems IS NOT NULL"),
+        ("entries", "eigene ACL-Einträge (Tabelle entry)", "SELECT COUNT(*) FROM entry"),
+        ("entries_client", "davon clientids", "SELECT COUNT(*) FROM entry WHERE kind = 'client'"),
+        ("entries_owner", "davon Besitzer", "SELECT COUNT(*) FROM entry WHERE owner = 1"),
+        ("effective", "effektive Rechte Pfad/clientid (Tabelle effective)",
+         "SELECT COUNT(*) FROM effective"),
+        ("clientids", "clientids mit Rechten", "SELECT COUNT(DISTINCT clientid) FROM effective"),
+    ]
+    rows = [(name, con.execute(sql).fetchone()[0], text) for name, text, sql in queries]
+    output(["name", "count", "description"], rows, args.format)
     return 0
 
 

@@ -23,6 +23,9 @@ Beispiele:
   # alle clientids mit Anzahl Pfade
   uv run main.py clients --format json
 
+  # Anzahl der Einträge in der DB (Pfade, ACLs, Rechte, clientids)
+  uv run main.py count
+
   # ACL und effektive Rechte eines Pfads
   uv run main.py show /fs/account1/container1
 

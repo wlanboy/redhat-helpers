@@ -8,6 +8,7 @@ Kommandos:
   collect             ACLs aus dem fsimage (oder live) lesen und in SQLite speichern
   search CLIENTID     Pfade, auf die eine clientid Rechte hat (Wildcards erlaubt)
   clients             alle clientids mit Anzahl Pfade
+  count               Anzahl der Einträge in der DB (Pfade, ACLs, Rechte, clientids)
   show PFAD           ACL und effektive Rechte eines Pfads
   export              effektive Rechte als CSV (Format wie testdata/expected.csv)
   add QUELLE NEU      NEU überall mit den Rechten von QUELLE ergänzen (Migration)
@@ -43,6 +44,7 @@ from hdfs.commands import (
     cmd_add,
     cmd_clients,
     cmd_collect,
+    cmd_count,
     cmd_export,
     cmd_remove,
     cmd_replace,
@@ -116,6 +118,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("clients", parents=[db_opts, fmt_opts], help="alle clientids auflisten")
     p.set_defaults(func=cmd_clients)
+
+    p = sub.add_parser("count", parents=[db_opts, fmt_opts], help="Einträge in der DB zählen")
+    p.set_defaults(func=cmd_count)
 
     p = sub.add_parser("show", parents=[db_opts], help="ACL eines Pfads anzeigen")
     p.add_argument("path")

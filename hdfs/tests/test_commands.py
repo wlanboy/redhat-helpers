@@ -173,6 +173,14 @@ class CommandTest(unittest.TestCase):
         _, out, _ = self.run_main("clients", "--format", "csv")
         self.assertIn("@client3;3;1:1 3:2;2;2", out)
 
+        rc, out, _ = self.run_main("count", "--format", "csv")
+        self.assertEqual(rc, 0)
+        counts = {r[0]: int(r[1]) for r in list(csv.reader(io.StringIO(out), delimiter=";"))[1:]}
+        self.assertEqual(counts["paths"], 4)
+        self.assertEqual(counts["paths_with_acl"], 3)
+        self.assertEqual(counts["paths_inherited"], 1)
+        self.assertEqual(counts["clientids"], 5)
+
         _, out, _ = self.run_main("show", "/fs/account1/container1/")
         self.assertIn("geerbt von /fs/account1", out)
         rc, _, err = self.run_main("show", "/fs/gibtsnicht")
