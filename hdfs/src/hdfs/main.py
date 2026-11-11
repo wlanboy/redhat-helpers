@@ -2,6 +2,7 @@
 """ACL-Metadaten (xattr user.acl) in HDFS einsammeln, durchsuchen und ändern.
 
 ACL-Format: <besitzer>|<eintrag>=<recht>,...  (recht = Bitmaske, Details in hdfs.md)
+Was die Bits bedeuten, legt die Rechte-Tabelle fest (--permissions, hdfs.md).
 
 Kommandos:
   collect             ACLs aus dem fsimage (oder live) lesen und in SQLite speichern
@@ -31,7 +32,6 @@ import argparse
 import os
 import sys
 from pathlib import Path
-from typing import Optional
 
 if __name__ == "__main__" and not __package__:
     # Direkt als Skript gestartet (python3 src/hdfs/main.py): Dann steht src/hdfs
@@ -153,7 +153,7 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main(argv: Optional[list] = None) -> int:
+def main(argv: list | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         activate(find_permissions(args.permissions, Path(args.db)))

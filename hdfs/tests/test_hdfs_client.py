@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import ClassVar
 from unittest import mock
 
 from hdfs import hdfs_client
@@ -77,7 +78,7 @@ class GlobTest(unittest.TestCase):
 
 
 class WriteScriptTest(unittest.TestCase):
-    changes = [
+    changes: ClassVar[list[Change]] = [
         Change("/fs/account1", "@client3|@test1=1", "@client3|@test1=1,@newapp=19"),
         Change("/fs/acc 2/c*1", None, "@a|#ops=3,$x='y'"),
         Change("/fs/a3", "@x|", None),
@@ -98,7 +99,7 @@ class WriteScriptTest(unittest.TestCase):
                         f"printf '%s\\x1f' \"$@\" >> '{calls}'\necho >> '{calls}'\n{fake_body}\n")
         fake.chmod(0o755)
         proc = subprocess.run(["bash", str(self.script)], env={**os.environ, "HADOOP": str(fake)},
-                              capture_output=True, text=True)
+                              capture_output=True, text=True, check=False)
         lines = calls.read_text().splitlines() if calls.exists() else []
         return proc, [line.rstrip("\x1f").split("\x1f") for line in lines]
 
@@ -107,7 +108,7 @@ class WriteScriptTest(unittest.TestCase):
         self.assertTrue(text.startswith("#!/usr/bin/env bash\n# Kopf 1\n# Kopf 2\n"))
         self.assertIn("# alt: @client3|@test1=1", text)
         self.assertTrue(self.script.stat().st_mode & stat.S_IXUSR)
-        self.assertEqual(subprocess.run(["bash", "-n", str(self.script)]).returncode, 0)
+        self.assertEqual(subprocess.run(["bash", "-n", str(self.script)], check=False).returncode, 0)
 
     def test_arguments_reach_hadoop_unchanged(self):
         proc, calls = self.run_script("exit 0")

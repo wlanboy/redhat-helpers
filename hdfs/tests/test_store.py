@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
+from typing import ClassVar
 
 from hdfs.changes import Change
 from hdfs.common import UsageError, natural_key
@@ -80,8 +81,8 @@ class StoreTest(unittest.TestCase):
 
 
 class OutputTest(unittest.TestCase):
-    columns = ["path", "perm", "owner"]
-    rows = [("/fs/a", 3, True), ("/fs/long/path", 19, False)]
+    columns: ClassVar[list[str]] = ["path", "perm", "owner"]
+    rows: ClassVar[list[tuple]] = [("/fs/a", 3, True), ("/fs/long/path", 19, False)]
 
     def render(self, fmt: str) -> str:
         buffer = io.StringIO()

@@ -15,7 +15,6 @@ from __future__ import annotations
 import posixpath
 import re
 from dataclasses import dataclass
-from typing import Optional
 
 from hdfs.common import UsageError
 from hdfs.permissions import MAX_PERM, active
@@ -50,7 +49,7 @@ def principal_kind(principal: str) -> str:
     return "user"
 
 
-def split_token(token: str) -> tuple[str, Optional[int]]:
+def split_token(token: str) -> tuple[str, int | None]:
     """'@client1=3' -> ('@client1', 3); ungültige Einträge -> (token, None)."""
     # rpartition: getrennt wird am letzten '=', die Zahl steht immer am Ende
     principal, sep, perm = token.rpartition("=")

@@ -14,7 +14,6 @@ Gemeinsame Regeln:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Optional
 
 from hdfs.acl import Acl, covers, split_token
 from hdfs.permissions import active
@@ -23,8 +22,8 @@ from hdfs.permissions import active
 @dataclass
 class Change:
     path: str
-    old: Optional[str]  # None = Pfad hatte kein Attribut
-    new: Optional[str]  # None = Attribut entfernen
+    old: str | None  # None = Pfad hatte kein Attribut
+    new: str | None  # None = Attribut entfernen
 
 
 def merge_entries(tokens: list, principal: str, owner: bool) -> list:
@@ -115,7 +114,7 @@ def plan_replace(nodes: dict, old: str, new: str) -> list:
     return changes
 
 
-def plan_remove(nodes: dict, clientid: str, new_owner: Optional[str]) -> tuple:
+def plan_remove(nodes: dict, clientid: str, new_owner: str | None) -> tuple:
     """Entfernt clientid aus allen ACLs.
 
     Eine ACL braucht einen Besitzer. Ist clientid Besitzer, wird er durch

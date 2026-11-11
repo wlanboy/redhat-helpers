@@ -17,6 +17,8 @@ Beispiele:
   uv run main.py search @client3
   uv run main.py search '@client*' --own --format csv
   uv run main.py search @client2 --has-bits 16      # nur Pfade mit ADMINISTRATION
+  uv run main.py search @client2 --has-bits ADMINISTRATION   # dasselbe über den Namen
+  uv run main.py show /fs/account1 --permissions eigene-rechte.json  # andere Rechte-Tabelle
 
   # alle clientids mit Anzahl Pfade
   uv run main.py clients --format json

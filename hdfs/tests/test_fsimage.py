@@ -1,4 +1,5 @@
 """Tests für hdfs.fsimage: XML von "hdfs oiv -p XML" lesen, Pfade zusammensetzen."""
+from __future__ import annotations
 
 import io
 import tempfile
@@ -6,7 +7,6 @@ import unittest
 import xml.etree.ElementTree as ET
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional
 
 from hdfs.common import UsageError
 from hdfs.fsimage import ROOT_ID, find_fsimage, parse_fsimage_xml, unmangle
@@ -20,7 +20,7 @@ def inode(inode_id: int, name: str, kind: str = "DIRECTORY", acl: str = "") -> s
     return f"<inode><id>{inode_id}</id><type>{kind}</type><name>{name}</name>{xattrs}</inode>"
 
 
-def fsimage(inodes: list, dirs: dict, refs: Sequence[int] = (), ref_children: Optional[dict] = None,
+def fsimage(inodes: list, dirs: dict, refs: Sequence[int] = (), ref_children: dict | None = None,
             extra: str = "") -> bytes:
     """Minimales oiv-XML: dirs = {parent: [kinder]}, ref_children = {parent: [index in refs]}."""
     ref_children = ref_children or {}

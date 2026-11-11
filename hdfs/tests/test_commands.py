@@ -137,7 +137,7 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(self.hdfs.nodes["/fs/account1"], "@jemand|")
 
     def test_remove_owner_skipped(self):
-        rc, out, err = self.run_main("remove", "@client3", "--live", "--apply")
+        rc, _out, err = self.run_main("remove", "@client3", "--live", "--apply")
         self.assertEqual(rc, 2)
         self.assertIn("ist Besitzer von 1 Pfaden", err)
         self.assertEqual(self.hdfs.nodes["/fs/account1/container2"], "@o|#ops=3")

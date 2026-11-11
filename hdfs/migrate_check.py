@@ -35,16 +35,15 @@ import csv
 import sqlite3
 import sys
 from pathlib import Path
-from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from hdfs.acl import Acl, covers, split_token  # noqa: E402
-from hdfs.permissions import activate, active  # noqa: E402
-from hdfs.permissions import find as find_permissions  # noqa: E402
+from hdfs.acl import Acl, covers, split_token
+from hdfs.permissions import activate, active
+from hdfs.permissions import find as find_permissions
 
 
-def principals(raw: Optional[str]) -> set:
+def principals(raw: str | None) -> set:
     """Besitzer und alle Einträge einer Roh-ACL (leer ohne ACL)."""
     if raw is None:
         return set()

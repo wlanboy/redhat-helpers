@@ -20,7 +20,6 @@ import xml.etree.ElementTree as ET
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Optional
 
 from hdfs.common import HdfsError, info
 from hdfs.fsimage import parse_fsimage_xml
@@ -29,7 +28,7 @@ from hdfs.fsimage import parse_fsimage_xml
 GLOB_BYTES = 100_000
 
 
-def _stop(proc: subprocess.Popen) -> Optional[int]:
+def _stop(proc: subprocess.Popen) -> int | None:
     """Beendet einen Prozess, dessen Ausgabe nicht mehr gelesen wird (sonst
     blockiert er auf der vollen Pipe). Exit-Code, None wenn abgebrochen."""
     killed = proc.poll() is None
@@ -52,14 +51,14 @@ def _wait_for_writer(fd: int, proc: subprocess.Popen) -> bool:
             return False
 
 
-def java_major(home: Path) -> Optional[int]:
+def java_major(home: Path) -> int | None:
     """Hauptversion des Java unter home, None wenn dort keins ist."""
     java = home / "bin" / "java"
     if not java.is_file():
         return None
     # "java -version" schreibt nach stderr, z. B. 'openjdk version "17.0.9"'
     # oder bei Java 8 'version "1.8.0_392"' (dann zählt die zweite Zahl)
-    proc = subprocess.run([str(java), "-version"], capture_output=True, text=True)
+    proc = subprocess.run([str(java), "-version"], capture_output=True, text=True, check=False)
     match = re.search(r'version "(\d+)(?:\.(\d+))?', proc.stderr)
     if not match:
         return None
@@ -249,7 +248,8 @@ class Hdfs:
     def dfs(self, *args: str) -> subprocess.CompletedProcess:
         """Ein "hdfs dfs ..."-Aufruf. Fehler werden nicht geworfen, sondern über
         returncode/stderr ausgewertet, weil manche (leerer Glob) normal sind."""
-        return subprocess.run([str(self.bin), "dfs", *args], env=self.env, capture_output=True, text=True)
+        return subprocess.run([str(self.bin), "dfs", *args], env=self.env, capture_output=True, text=True,
+                              check=False)
 
     def getfattr(self, pattern: str, attr: str) -> tuple:
         """Ein "getfattr -d" -> ({pfad: wert oder None}, übersprungen, unerklärt).

@@ -5,10 +5,10 @@ from __future__ import annotations
 import csv
 import json
 import sys
-from typing import IO, Optional
+from typing import IO
 
 
-def output(columns: list, rows: list, fmt: str, file: Optional[IO[str]] = None) -> None:
+def output(columns: list, rows: list, fmt: str, file: IO[str] | None = None) -> None:
     """rows sind Tupel in der Reihenfolge von columns; fmt: table, csv oder json.
 
     bool-Werte (z. B. owner) werden je Format passend dargestellt:

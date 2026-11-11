@@ -26,7 +26,6 @@ import os
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional, Union
 
 from hdfs.common import UsageError
 
@@ -50,7 +49,7 @@ class Permissions:
     # Herkunft für Meldungen: Dateipfad oder "eingebaut"
     origin: str = "eingebaut"
 
-    def parse(self, value: Union[str, int]) -> int:
+    def parse(self, value: str | int) -> int:
         """'3', 'READ', 'read+write' oder 'READ|16' -> Maske (Namen ohne Groß/klein)."""
         if isinstance(value, int):
             return value
@@ -109,7 +108,7 @@ def activate(permissions: Permissions) -> None:
     _active = permissions
 
 
-def from_dict(data: dict, origin: str) -> Permissions:
+def from_dict(data: object, origin: str) -> Permissions:
     """Prüft eine Konfiguration (geparstes JSON) und baut daraus die Tabelle."""
     if not isinstance(data, dict):
         raise UsageError(f"{origin}: erwartet ein JSON-Objekt.")
@@ -155,7 +154,7 @@ def load(path: Path) -> Permissions:
     return from_dict(data, str(path))
 
 
-def find(option: Optional[str], db: Optional[Path]) -> Permissions:
+def find(option: str | None, db: Path | None) -> Permissions:
     """Tabelle nach Vorrang: --permissions, $HDFS_ACL_PERMISSIONS,
     permissions.json neben der DB, sonst eingebaut (Spring-Standard)."""
     explicit = option or os.environ.get("HDFS_ACL_PERMISSIONS")

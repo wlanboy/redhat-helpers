@@ -1,6 +1,7 @@
 """Tests für hdfs.changes: add/replace/remove/restore planen (Beispiele aus hdfs.md)."""
 
 import unittest
+from typing import ClassVar
 
 from hdfs.changes import (
     Change,
@@ -124,7 +125,7 @@ class PlanRemoveTest(unittest.TestCase):
 
 
 class PlanRestoreTest(unittest.TestCase):
-    backup = [Change("/fs/a", "@o|", "@o|@n=1"), Change("/fs/b", None, "@o|@n=1")]
+    backup: ClassVar[list[Change]] = [Change("/fs/a", "@o|", "@o|@n=1"), Change("/fs/b", None, "@o|@n=1")]
 
     def test_restore(self):
         changes, conflicts = plan_restore({"/fs/a": "@o|@n=1", "/fs/b": "@o|@n=1"}, self.backup, False)
