@@ -19,7 +19,8 @@ ohne Last auf dem NameNode. --live liest stattdessen direkt aus HDFS.
 
 add/replace/remove/restore lesen ein, lesen die betroffenen Pfade live nach,
 zeigen den Plan und schreiben erst mit --apply. Vor dem Schreiben wird ein
-Backup angelegt.
+Backup angelegt. --generate DATEI schreibt statt HDFS ein Shell-Skript mit
+den "hadoop fs"-Aufrufen (ebenfalls mit Backup).
 
 Nur Standardbibliothek, läuft ab Python 3.9.
 """
@@ -73,7 +74,11 @@ def build_parser() -> argparse.ArgumentParser:
                                 "wenn HADOOP_HOME nicht gesetzt ist (Default: $HADOOP_VERSION oder 3.4.2)")
 
     write_opts = argparse.ArgumentParser(add_help=False)
-    write_opts.add_argument("--apply", action="store_true", help="Änderungen wirklich schreiben")
+    write_mode = write_opts.add_mutually_exclusive_group()
+    write_mode.add_argument("--apply", action="store_true", help="Änderungen wirklich schreiben")
+    write_mode.add_argument("--generate", metavar="DATEI",
+                            help="nichts schreiben, sondern ein Shell-Skript mit allen "
+                                 "'hadoop fs -setfattr'-Aufrufen erzeugen (plus Backup)")
 
     fmt_opts = argparse.ArgumentParser(add_help=False)
     fmt_opts.add_argument("--format", choices=["table", "csv", "json"], default="table")

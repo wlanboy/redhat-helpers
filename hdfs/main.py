@@ -30,6 +30,8 @@ Beispiele:
   # @neu überall mit den Rechten von @alt ergänzen (erst Plan, dann schreiben)
   uv run main.py add @alt @neu
   uv run main.py add @alt @neu --apply
+  uv run main.py add @alt @neu --generate add-neu.sh   # statt --apply: Skript mit allen
+                                                       # "hadoop fs"-Aufrufen, HDFS bleibt unverändert
 
   # @alt überall durch @neu ersetzen, auch als Besitzer
   uv run main.py replace @alt @neu --apply
@@ -37,7 +39,8 @@ Beispiele:
   # clientid entfernen; wo sie Besitzer ist, übernimmt #ops
   uv run main.py remove @client3 --new-owner '#ops' --apply
 
-  # Änderungen aus einem Backup zurückdrehen
+  # Änderungen aus einem Backup zurückdrehen. Das Backup entsteht automatisch
+  # bei jedem --apply und --generate neben der DB (Name steht in der Ausgabe).
   uv run main.py restore hdfs-acl-backup-20261111-120000-add-neu.csv --apply
 """
 

@@ -13,6 +13,7 @@ import base64
 import os
 import re
 import select
+import shlex
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
@@ -185,6 +186,35 @@ def path_globs(paths: list) -> Iterator[tuple]:
         size += length
     if batch:
         yield "/{" + ",".join(batch) + "}", len(batch)
+
+
+def write_script(target: Path, changes: list, attr: str, comment: list) -> None:
+    """Schreibt die Änderungen als Shell-Skript mit einem "hadoop fs" je Pfad.
+
+    Gegenstück zu Hdfs.write() zum Prüfen und späteren Ausführen von Hand.
+    Ein Aufruf je Pfad ist langsamer (eine JVM je Zeile), aber lesbar und
+    einzeln wiederholbar. Der Pfad wird wie in path_globs entwertet, weil
+    "hadoop fs" jeden Pfad als Glob auswertet. Der Wert steht wie in write()
+    in Anführungszeichen, damit Hadoop ihn immer als Text nimmt.
+    """
+    lines = ["#!/usr/bin/env bash", *(f"# {line}" for line in comment), "",
+             "# Hadoop-Client: per HADOOP überschreibbar, z. B. HADOOP=/opt/hadoop/bin/hadoop",
+             'HADOOP="${HADOOP:-hadoop}"', "failed=0", ""]
+    for change in changes:
+        if change.old is not None:
+            lines.append(f"# alt: {change.old}")
+        path = shlex.quote(glob_escape(change.path))
+        if change.new is None:
+            command = f"-setfattr -x {shlex.quote(attr)} {path}"
+        else:
+            value = shlex.quote(f'"{change.new}"')
+            command = f"-setfattr -n {shlex.quote(attr)} -v {value} {path}"
+        lines.append(f'"$HADOOP" fs {command} || failed=$((failed + 1))')
+    lines += ["", 'if [ "$failed" -ne 0 ]; then',
+              f'    echo "$failed von {len(changes)} Aufrufen fehlgeschlagen" >&2', "    exit 1", "fi",
+              f'echo "OK: {len(changes)} Pfade geschrieben"', ""]
+    target.write_text("\n".join(lines))
+    target.chmod(0o755)
 
 
 class Hdfs:

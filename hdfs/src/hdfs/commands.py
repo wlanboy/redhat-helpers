@@ -21,7 +21,7 @@ from hdfs.acl import client_id, covers
 from hdfs.changes import plan_add, plan_remove, plan_replace, plan_restore
 from hdfs.common import HdfsError, UsageError, info, natural_key
 from hdfs.fsimage import find_fsimage
-from hdfs.hdfs_client import Hdfs
+from hdfs.hdfs_client import Hdfs, write_script
 from hdfs.output import output
 from hdfs.store import open_db, read_backup, save, write_backup
 
@@ -97,7 +97,9 @@ def execute(args: argparse.Namespace, hdfs: Hdfs, label: str, changes: list,
             nodes: dict, source: str) -> int:
     """Gemeinsamer Ablauf aller ändernden Kommandos.
 
-    Ohne --apply endet er nach der Anzeige (Dry-Run). Mit --apply:
+    Ohne --apply endet er nach der Anzeige (Dry-Run). Mit --generate DATEI:
+    Backup schreiben und die Änderungen als Shell-Skript mit "hadoop fs"
+    ausgeben, HDFS bleibt unverändert. Mit --apply:
     Backup schreiben, dann HDFS ändern, dann die geänderten Pfade neu lesen
     und mit dem geplanten Wert vergleichen. Die DB bekommt die gelesenen Werte.
     Exit-Code 1, wenn ein Aufruf fehlschlug oder ein Wert nicht stimmt.
@@ -111,6 +113,18 @@ def execute(args: argparse.Namespace, hdfs: Hdfs, label: str, changes: list,
         print("Keine Änderungen nötig.")
         return 0
     print(f"{len(changes)} Pfade betroffen.")
+    if args.generate:
+        # Backup auch hier: wer das Skript ausführt, kann danach mit restore zurück
+        backup = write_backup(Path(args.db), label, changes)
+        script = Path(args.generate)
+        write_script(script, changes, args.attr, [
+            f"hdfs-acl {label}: {len(changes)} Pfade, erzeugt {datetime.now().isoformat(timespec='seconds')}",
+            f"geplant auf: {source}",
+            f"zurückdrehen: uv run main.py restore {backup} --apply",
+        ])
+        print(f"Backup: {backup}  (zurückdrehen mit: restore {backup})")
+        print(f"Skript: {script}  (nichts geschrieben, Skript prüfen und ausführen)")
+        return 0
     if not args.apply:
         print("Dry-Run: nichts geschrieben. Mit --apply ausführen.")
         return 0

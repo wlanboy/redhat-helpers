@@ -200,6 +200,17 @@ des letzten `collect`, Zeitpunkt und Quelle stehen auf stderr.
 4. Die geänderten Pfade erneut lesen, jeden Wert prüfen und die DB mit dem
    Ergebnis fortschreiben (Quelle z. B. `fsimage_… + replace-client3-newapp`).
 
+Statt `--apply` erzeugt `--generate DATEI` ein Shell-Skript mit einem
+`hadoop fs -setfattr` je Pfad (bzw. `-setfattr -x` zum Entfernen), z. B. für
+ein Change-Ticket oder wenn ein anderer Benutzer schreiben muss. HDFS bleibt
+dabei unverändert, die Schritte 1–3 laufen aber genauso, und das Backup wird
+ebenfalls geschrieben, damit `restore` nach dem Skript funktioniert. Im
+Skript steht über jedem Aufruf der alte Wert als Kommentar. Der Client lässt
+sich mit `HADOOP=/pfad/zu/bin/hadoop ./skript.sh` wählen. Fehlgeschlagene
+Aufrufe werden gezählt, das Skript läuft weiter und endet dann mit Exit-Code 1.
+Das Nachprüfen aus Schritt 4 entfällt: Wiederholt man das Kommando danach
+im Dry-Run, muss es „Keine Änderungen nötig.“ melden.
+
 Grenze des fsimage: Ein Pfad, der erst **nach** dem Checkpoint die clientid
 bekommen hat, fehlt im Plan. Nach dem nächsten Checkpoint erneut ausführen
 (alle Kommandos sind wiederholbar) oder bei wenigen Pfaden `--live` nehmen.
@@ -212,6 +223,7 @@ Client-IDs bleiben Wort für Wort erhalten.
 # Migration: @newapp bekommt überall dieselben Rechte wie @client3
 hdfs-acl add @client3 @newapp            # Plan ansehen
 hdfs-acl add @client3 @newapp --apply
+hdfs-acl add @client3 @newapp --generate add-newapp.sh   # oder: Skript statt schreiben
 ```
 
 - Ist `@client3` Besitzer, bleibt es Besitzer, denn eine ACL hat nur
