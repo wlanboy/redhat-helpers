@@ -106,6 +106,7 @@ hdfs dfsadmin -safemode leave
 hdfs dfsadmin -fetchImage .          # legt fsimage_<txid> hier ab
 
 T=~/git/redhat-helpers/hdfs/src/hdfs/main.py
+export DEPTH=3                       # Testdaten haben Unterordner sub
 python3 $T collect                   # aus dem fsimage
 python3 $T export | diff - ~/git/redhat-helpers/hdfs/testdata/expected.csv && echo OK
 python3 $T collect --live --db live.db
