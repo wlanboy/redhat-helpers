@@ -109,7 +109,8 @@ check() {
 setup_hdfs
 start_namenode
 TESTDATA=$WORK_DIR/testdata
-export BASE_DIR ACL_ATTR PARALLEL HDFS_JAVA_HOME=$JAVA_HOME
+# DEPTH=3: die Testdaten von test.sh haben Unterordner sub (dritte Ebene)
+export BASE_DIR ACL_ATTR PARALLEL HDFS_JAVA_HOME=$JAVA_HOME DEPTH=3
 
 # test.sh legt die Testdaten im eigenen NameNode an (HADOOP_CONF_DIR zeigt
 # schon dorthin) und schreibt die Vergleichsdateien in den Arbeitsordner
