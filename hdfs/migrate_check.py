@@ -125,7 +125,7 @@ def check_replaced(before: Acl, after: Acl, old: str, new: str) -> list:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser = argparse.ArgumentParser(description=(__doc__ or "").partition("\n")[0])
     parser.add_argument("--stage", choices=["added", "replaced", "restored"], required=True)
     parser.add_argument("--old", help="clientid vor der Migration")
     parser.add_argument("--new", help="clientid nach der Migration")
@@ -162,7 +162,8 @@ def main() -> int:
             errors.append(f"{path}: fehlt")
             continue
         after = actual_acl[path]
-        if args.stage == "restored" or args.old not in principals(before):
+        # before is None: ohne ACL kann ALT nicht drinstehen (so auch für pyright klar)
+        if args.stage == "restored" or before is None or args.old not in principals(before):
             unchanged += 1
             if after != before:
                 errors.append(f"{path}: hätte sich nicht ändern dürfen, {before!r} -> {after!r}")
