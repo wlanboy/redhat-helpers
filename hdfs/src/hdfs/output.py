@@ -5,20 +5,24 @@ from __future__ import annotations
 import csv
 import json
 import sys
+from typing import IO, Optional
 
 
-def output(columns: list, rows: list, fmt: str, file=sys.stdout) -> None:
+def output(columns: list, rows: list, fmt: str, file: Optional[IO[str]] = None) -> None:
     """rows sind Tupel in der Reihenfolge von columns; fmt: table, csv oder json.
 
     bool-Werte (z. B. owner) werden je Format passend dargestellt:
     JSON true/false, CSV 1/0, Tabelle "ja"/leer.
     """
+    # erst hier auflösen, nicht als Default: sonst gilt das sys.stdout beim
+    # Import, und eine spätere Umleitung (redirect_stdout, Tests) greift nicht
+    out: IO[str] = file or sys.stdout
     if fmt == "json":
-        json.dump([dict(zip(columns, row)) for row in rows], file, indent=2, ensure_ascii=False)
-        file.write("\n")
+        json.dump([dict(zip(columns, row)) for row in rows], out, indent=2, ensure_ascii=False)
+        out.write("\n")
         return
     if fmt == "csv":
-        writer = csv.writer(file, delimiter=";", lineterminator="\n")
+        writer = csv.writer(out, delimiter=";", lineterminator="\n")
         writer.writerow(columns)
         writer.writerows([[int(v) if isinstance(v, bool) else v for v in row] for row in rows])
         return
@@ -27,4 +31,4 @@ def output(columns: list, rows: list, fmt: str, file=sys.stdout) -> None:
     cells += [["ja" if v is True else "" if v is False else str(v) for v in row] for row in rows]
     widths = [max(len(row[i]) for row in cells) for i in range(len(columns))]
     for row in cells:
-        print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip(), file=file)
+        print("  ".join(cell.ljust(width) for cell, width in zip(row, widths)).rstrip(), file=out)
