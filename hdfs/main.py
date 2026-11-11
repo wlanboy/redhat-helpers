@@ -32,6 +32,7 @@ Beispiele:
   # @neu überall mit den Rechten von @alt ergänzen (erst Plan, dann schreiben)
   uv run main.py add @alt @neu
   uv run main.py add @alt @neu --apply
+  export DEPTH=3 HADOOP_CONF_DIR=$PWD/namenode
   uv run main.py add @client1 @client2 --fsimage ./fsimage_0000000000000001017 --generate add-neu.sh
                                                       # statt --apply: Skript mit allen
                                                        # "hadoop fs"-Aufrufen, HDFS bleibt unverändert
