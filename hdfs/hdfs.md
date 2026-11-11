@@ -78,6 +78,18 @@ uv run hdfs-acl <kommando> ...
 `acl.py`, `changes.py` und `fsimage.py` arbeiten nur auf Strings bzw.
 Streams und lassen sich ohne HDFS testen.
 
+Unit-Tests (`tests/`, nur `unittest` aus der Standardbibliothek, kein HDFS
+nötig; die Kommandos laufen dort gegen einen Fake-Client):
+
+```bash
+uv run python -m unittest discover -s tests
+PYTHONPATH=src python3 -m unittest discover -s tests   # ohne uv
+uv run pyright
+```
+
+`test_commands.py` prüft außerdem, dass `export` aus `testdata/acls.csv`
+genau `testdata/expected.csv` ergibt.
+
 Für den HDFS-Client gelten dieselben Variablen wie bei `test.sh`
 (`HADOOP_REPO`, `HADOOP_VERSION`, `HADOOP_HOME`, `HADOOP_CONF_DIR`,
 `HDFS_JAVA_HOME`), siehe unten. `HADOOP_VERSION` gibt es auch als Option
