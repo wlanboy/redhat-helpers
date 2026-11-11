@@ -16,7 +16,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
 
-from hdfs.acl import ADMIN_PERM, OWNER_PERM, Acl, covers, split_token
+from hdfs.acl import Acl, covers, split_token
+from hdfs.permissions import active
 
 
 @dataclass
@@ -29,7 +30,7 @@ class Change:
 def merge_entries(tokens: list, principal: str, owner: bool) -> list:
     """Fasst mehrere Einträge von principal zu einem an der ersten Stelle zusammen,
     die Bits werden verodert. owner=True (principal ist Besitzer): Deckt
-    OWNER_PERM schon alles ab, entfallen die Einträge ganz.
+    das Besitzer-Recht (active().owner) schon alles ab, entfallen die Einträge ganz.
 
     Beispiel: ['@a=1', '#ops=3', '@a=4'] -> ['@a=5', '#ops=3']
     """
@@ -42,7 +43,7 @@ def merge_entries(tokens: list, principal: str, owner: bool) -> list:
     merged = []
     # placed: der zusammengefasste Eintrag steht schon in merged; wird er nicht
     # gebraucht, wird so getan, als ob, damit alle Einträge von principal wegfallen
-    placed = owner and covers(OWNER_PERM, mask)
+    placed = owner and covers(active().owner, mask)
     for token in tokens:
         if split_token(token)[0] != principal:
             merged.append(token)
@@ -57,7 +58,8 @@ def plan_add(nodes: dict, source: str, new: str) -> tuple:
 
     Phase 1 einer Migration: beide clientids greifen. Eine ACL hat nur einen
     Besitzer, ist QUELLE Besitzer, bleibt sie es. NEU bekommt dort einen
-    Eintrag mit den Rechten des Besitzers (OWNER_PERM) plus ADMIN_PERM,
+    Eintrag mit den Rechten des Besitzers (active().owner) plus dem
+    Verwaltungsrecht (active().admin),
     damit NEU die ACL verwalten kann wie der Besitzer. Erst replace macht
     NEU zum Besitzer.
 
@@ -80,12 +82,12 @@ def plan_add(nodes: dict, source: str, new: str) -> tuple:
         # Eintrag und dazu das Verwaltungsrecht des Besitzers (=19)
         perm, source_owns = rights[source]
         if source_owns:
-            perm |= ADMIN_PERM
+            perm |= active().admin
         if covers(rights.get(new, (0, False))[0], perm):
             continue
         # anhängen; vorhandene Einträge von NEU werden an ihrer Stelle um die
         # fehlenden Bits ergänzt. Ist NEU Besitzer, bleibt der Eintrag trotzdem,
-        # denn er trägt Bits, die OWNER_PERM nicht hat.
+        # denn er trägt Bits, die das Besitzer-Recht nicht hat.
         tokens = merge_entries(acl.tokens + [f"{new}={perm}"], new, owner=False)
         changes.append(Change(path, raw, Acl(acl.owner, tokens).render()))
     return changes, found
@@ -103,7 +105,7 @@ def plan_replace(nodes: dict, old: str, new: str) -> list:
         owner = new if acl.owner == old else acl.owner
         # ALT an derselben Stelle in NEU umbenennen; hatte NEU schon einen Eintrag,
         # bleibt einer mit den Bits beider, als Besitzer nur, wenn er mehr als
-        # OWNER_PERM trägt
+        # das Besitzer-Recht trägt
         tokens = []
         for token in acl.tokens:
             principal, perm = split_token(token)

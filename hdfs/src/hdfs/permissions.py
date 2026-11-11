@@ -134,7 +134,7 @@ def from_dict(data: dict, origin: str) -> Permissions:
         if isinstance(value, bool) or not isinstance(value, (int, str)):
             raise UsageError(f"{origin}: '{key}' muss eine Maske oder Namen sein.")
         try:
-            return table.parse(value if isinstance(value, int) else value)
+            return table.parse(value)
         except UsageError as error:
             raise UsageError(f"{origin}: '{key}': {error}") from None
 

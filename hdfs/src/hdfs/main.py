@@ -51,6 +51,8 @@ from hdfs.commands import (
     cmd_show,
 )
 from hdfs.common import HdfsError, UsageError
+from hdfs.permissions import activate
+from hdfs.permissions import find as find_permissions
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -59,6 +61,10 @@ def build_parser() -> argparse.ArgumentParser:
     db_opts = argparse.ArgumentParser(add_help=False)
     db_opts.add_argument("--db", default=os.environ.get("HDFS_ACL_DB", "hdfs-acl.db"),
                          help="SQLite-Datei (Default: $HDFS_ACL_DB oder ./hdfs-acl.db)")
+    db_opts.add_argument("--permissions", metavar="DATEI",
+                         help="Rechte-Tabelle als JSON: Namen der Bits, Recht des Besitzers, "
+                              "Verwaltungsrecht (Default: $HDFS_ACL_PERMISSIONS, sonst "
+                              "permissions.json neben der DB, sonst Spring-Standard)")
 
     hdfs_opts = argparse.ArgumentParser(add_help=False)
     hdfs_opts.add_argument("--base-dir", default=os.environ.get("BASE_DIR", "/fs"),
@@ -102,9 +108,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("search", parents=[db_opts, fmt_opts], help="nach clientid suchen")
     p.add_argument("clientid", help="z. B. @client3 oder '@client*' (Glob)")
     p.add_argument("--own", action="store_true", help="nur eigene Einträge, ohne Vererbung")
-    p.add_argument("--perm", type=int, metavar="MASKE", help="nur genau diese Maske, z. B. 3")
-    p.add_argument("--has-bits", type=int, metavar="MASKE",
-                   help="nur Rechte, die alle Bits von MASKE enthalten, z. B. 16")
+    p.add_argument("--perm", metavar="RECHT",
+                   help="nur genau diese Maske, als Zahl oder Namen: 3, READ+WRITE")
+    p.add_argument("--has-bits", metavar="RECHT",
+                   help="nur Rechte, die alle Bits enthalten: 16, ADMINISTRATION")
     p.set_defaults(func=cmd_search)
 
     p = sub.add_parser("clients", parents=[db_opts, fmt_opts], help="alle clientids auflisten")
@@ -149,6 +156,7 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Optional[list] = None) -> int:
     args = build_parser().parse_args(argv)
     try:
+        activate(find_permissions(args.permissions, Path(args.db)))
         return args.func(args)
     except (UsageError, HdfsError) as error:
         # erwartete Fehler nur als Meldung, alles andere mit Traceback

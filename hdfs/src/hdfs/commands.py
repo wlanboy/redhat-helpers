@@ -23,6 +23,7 @@ from hdfs.common import HdfsError, UsageError, info, natural_key
 from hdfs.fsimage import find_fsimage
 from hdfs.hdfs_client import Hdfs, write_script
 from hdfs.output import output
+from hdfs.permissions import active
 from hdfs.store import open_db, read_backup, save, write_backup
 
 
@@ -175,7 +176,7 @@ def cmd_search(args: argparse.Namespace) -> int:
         # nur aktiv gesetzte Einträge, letzte Spalte ist die Roh-ACL des Pfads;
         # Besitzer + zusätzliche Einträge werden zu einer Zeile verodert (SQLite
         # hat kein bitweises OR als Aggregat)
-        columns = ["path", "clientid", "perm", "owner", "acl"]
+        columns = ["path", "clientid", "perm", "rights", "owner", "acl"]
         merged = {}
         for path, clientid, perm, owner, acl in con.execute(
                 """SELECT e.path, e.principal, e.perm, e.owner, n.acl
@@ -185,15 +186,18 @@ def cmd_search(args: argparse.Namespace) -> int:
             merged[(path, clientid)] = (old_perm | perm, old_owner | owner, acl)
         found = [(path, clientid, *rest) for (path, clientid), rest in merged.items()]
     else:
-        columns = ["path", "clientid", "perm", "owner", "acl_from"]
+        columns = ["path", "clientid", "perm", "rights", "owner", "acl_from"]
         found = con.execute(
             "SELECT path, clientid, perm, owner, acl_from FROM effective WHERE clientid GLOB ?",
             (pattern,))
+    # --perm/--has-bits als Zahl oder Namen aus der Rechte-Tabelle
+    table = active()
+    exact = table.parse(args.perm) if args.perm is not None else None
+    bits = table.parse(args.has_bits) if args.has_bits is not None else None
     rows = [
-        (path, clientid, perm, bool(owner), last)
+        (path, clientid, perm, table.describe(perm), bool(owner), last)
         for path, clientid, perm, owner, last in found
-        if (args.perm is None or perm == args.perm)
-        and (args.has_bits is None or covers(perm, args.has_bits))
+        if (exact is None or perm == exact) and (bits is None or covers(perm, bits))
     ]
     rows.sort(key=lambda r: (natural_key(r[1]), natural_key(r[0])))
     output(columns, rows, args.format)
@@ -221,6 +225,12 @@ def cmd_clients(args: argparse.Namespace) -> int:
     return 0
 
 
+def rights_suffix(perm: int) -> str:
+    """' [READ+WRITE]' für show; leer, wenn die Rechte-Tabelle keine Namen hat."""
+    names = active().describe(perm)
+    return f" [{names}]" if names else ""
+
+
 def cmd_show(args: argparse.Namespace) -> int:
     con = open_db(Path(args.db))
     path = args.path.rstrip("/")
@@ -240,7 +250,8 @@ def cmd_show(args: argparse.Namespace) -> int:
     rights = con.execute("SELECT clientid, perm, owner FROM effective WHERE path = ?", (path,)).fetchall()
     rights.sort(key=lambda r: natural_key(r[0]))
     print("Rechte:  " + (", ".join(
-        f"{clientid}={perm}" + (" (Besitzer)" if owner else "") for clientid, perm, owner in rights
+        f"{clientid}={perm}{rights_suffix(perm)}" + (" (Besitzer)" if owner else "")
+        for clientid, perm, owner in rights
     ) or "keine clientid"))
     return 0
 

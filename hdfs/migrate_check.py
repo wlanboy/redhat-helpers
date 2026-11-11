@@ -39,7 +39,9 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from hdfs.acl import ADMIN_PERM, OWNER_PERM, Acl, covers, split_token
+from hdfs.acl import Acl, covers, split_token  # noqa: E402
+from hdfs.permissions import activate, active  # noqa: E402
+from hdfs.permissions import find as find_permissions  # noqa: E402
 
 
 def principals(raw: Optional[str]) -> set:
@@ -70,7 +72,7 @@ def want_rights(expected: list, owners: dict, stage: str, old: str, new: str,
     """Erwartete effektive Rechte {(pfad, clientid): (recht, acl_von)}.
 
     owners: {pfad: besitzer} aus acls.csv. Wo die gültige ACL (acl_von) ALT
-    als Besitzer hat, bekommt NEU bei add zusätzlich ADMIN_PERM.
+    als Besitzer hat, bekommt NEU bei add zusätzlich das Verwaltungsrecht (active().admin).
     """
     rights = {}
 
@@ -79,7 +81,7 @@ def want_rights(expected: list, owners: dict, stage: str, old: str, new: str,
 
     for row in expected:
         path, clientid, perm, acl_from = row["path"], row["clientid"], int(row["perm"]), row["acl_from"]
-        admin = ADMIN_PERM if clientid == old and owners.get(acl_from) == old else 0
+        admin = active().admin if clientid == old and owners.get(acl_from) == old else 0
         if stage == "replaced" and clientid == old:
             # ALT heißt jetzt NEU; nach add bleibt das Bit 16 aus Phase 1
             grant(path, new, perm | (admin if after_add else 0), acl_from)
@@ -98,14 +100,14 @@ def check_added(before: Acl, after: Acl, old: str, new: str) -> list:
         errors.append(f"außer den Einträgen von {new} hat sich etwas geändert")
     perms = entries_of(after, new)
     if after.owner == new:
-        # NEU war schon Besitzer: ein Eintrag nur für Bits über 3
-        if len(perms) > 1 or (perms and covers(OWNER_PERM, perms[0])):
+        # NEU war schon Besitzer: ein Eintrag nur für Bits über dem Besitzer-Recht
+        if len(perms) > 1 or (perms and covers(active().owner, perms[0])):
             errors.append(f"Einträge {new}={perms} neben Besitzer {new}")
     elif len(perms) != 1:
         errors.append(f"{new} steht {len(perms)}-mal als Eintrag da, erwartet einmal")
-    elif before.owner == old and not covers(perms[0], OWNER_PERM | ADMIN_PERM):
+    elif before.owner == old and not covers(perms[0], active().owner | active().admin):
         errors.append(f"{new}={perms[0]} hat nicht die Rechte des Besitzers {old} "
-                      f"plus ADMINISTRATION ({OWNER_PERM | ADMIN_PERM})")
+                      f"plus ADMINISTRATION ({active().owner | active().admin})")
     return errors
 
 
@@ -119,7 +121,7 @@ def check_replaced(before: Acl, after: Acl, old: str, new: str) -> list:
     perms = entries_of(after, new)
     if len(perms) > 1:
         errors.append(f"{new} steht {len(perms)}-mal als Eintrag da")
-    if after.owner == new and perms and covers(OWNER_PERM, perms[0]):
+    if after.owner == new and perms and covers(active().owner, perms[0]):
         errors.append(f"überflüssiger Eintrag {new}={perms[0]} neben Besitzer {new}")
     return errors
 
@@ -134,7 +136,11 @@ def main() -> int:
     parser.add_argument("--acls", type=Path, required=True, help="acls.csv von test.sh")
     parser.add_argument("--expected", type=Path, required=True, help="expected.csv von test.sh")
     parser.add_argument("--db", type=Path, required=True, help="DB von collect --live")
+    parser.add_argument("--permissions", metavar="DATEI",
+                        help="Rechte-Tabelle wie bei hdfs-acl (Default: $HDFS_ACL_PERMISSIONS, "
+                             "sonst permissions.json neben der DB, sonst Spring-Standard)")
     args = parser.parse_args()
+    activate(find_permissions(args.permissions, args.db))
     if args.stage != "restored" and not (args.old and args.new):
         parser.error(f"--stage {args.stage} braucht --old und --new")
 

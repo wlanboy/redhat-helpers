@@ -16,7 +16,6 @@ from datetime import datetime
 from pathlib import Path
 
 from hdfs.acl import (
-    OWNER_PERM,
     Acl,
     acl_problems,
     is_ldap,
@@ -26,6 +25,7 @@ from hdfs.acl import (
 )
 from hdfs.changes import Change
 from hdfs.common import UsageError, info
+from hdfs.permissions import active
 
 SCHEMA = """
 CREATE TABLE meta (
@@ -91,7 +91,7 @@ def save(db: Path, base: str, attr: str, depth: int, origin: str, nodes: dict) -
             acl = Acl.parse(raw)
             if acl.owner and not is_ldap(acl.owner):
                 con.execute("INSERT INTO entry VALUES (?, ?, ?, ?, 1)",
-                            (path, acl.owner, principal_kind(acl.owner), OWNER_PERM))
+                            (path, acl.owner, principal_kind(acl.owner), active().owner))
             for token in acl.tokens:
                 principal, perm = split_token(token)
                 if perm is not None and not is_ldap(token):
@@ -112,6 +112,9 @@ def save(db: Path, base: str, attr: str, depth: int, origin: str, nodes: dict) -
         "depth": str(depth),
         "source": origin,
         "collected_at": datetime.now().isoformat(timespec="seconds"),
+        # effective und entry hängen am Besitzer-Recht; open_db() warnt, wenn
+        # später mit einer anderen Tabelle gelesen wird
+        "owner_perm": str(active().owner),
     }
     con.executemany("INSERT INTO meta VALUES (?, ?)", meta.items())
     con.commit()
@@ -128,6 +131,9 @@ def open_db(db: Path) -> sqlite3.Connection:
     con = sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True)
     meta = dict(con.execute("SELECT key, value FROM meta"))
     info(f"Stand {meta['collected_at']} aus {meta.get('source', '?')}, {meta['base_dir']}, {meta['attr']} ({db})")
+    if "owner_perm" in meta and int(meta["owner_perm"]) != active().owner:
+        info(f"Warnung: eingesammelt mit Besitzer-Recht {meta['owner_perm']}, die Rechte-Tabelle "
+             f"({active().origin}) sagt {active().owner}. Erneut 'collect' ausführen.")
     return con
 
 

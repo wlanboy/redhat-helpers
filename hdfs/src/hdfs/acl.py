@@ -3,8 +3,9 @@
 Format: <besitzer>|<eintrag>=<recht>,<eintrag>=<recht>,...
   besitzer/eintrag: @clientid, user (ohne Präfix) oder #gruppe
   LDAP-Teile wie cn=doc, ou=hell, sn=meier oder dc=firma=3 werden ignoriert
-  recht: Bitmaske aus der Spring-Security-ACL PermissionFactory, z. B.
-         1 = nur lesen, 3 = lesen+schreiben+löschen; der Besitzer hat immer 3
+  recht: Bitmaske aus der Spring-Security-ACL PermissionFactory; was welches
+         Bit bedeutet und welches Recht der Besitzer immer hat, steht in der
+         Rechte-Tabelle (permissions.py, konfigurierbar)
 
 Dieses Modul kennt kein HDFS und keine Datenbank, es arbeitet nur auf Strings.
 """
@@ -17,15 +18,12 @@ from dataclasses import dataclass
 from typing import Optional
 
 from hdfs.common import UsageError
+from hdfs.permissions import MAX_PERM, active
 
-# Recht des Besitzers, auch wenn er gar nicht oder schwächer gelistet ist
-OWNER_PERM = 3
-# BasePermission.ADMINISTRATION in Spring Security ACL: darf die ACL selbst
-# verwalten (Einträge ändern, Besitzer wechseln). Der Besitzer darf das in
-# Spring ohne dieses Bit (AclAuthorizationStrategyImpl), alle anderen nur mit.
-ADMIN_PERM = 16
-# Spring speichert die Maske als Java-int, höchstes nutzbares Bit ist 1 << 30
-MAX_PERM = (1 << 31) - 1
+# Recht des Besitzers (auch wenn er gar nicht oder schwächer gelistet ist) und
+# Verwaltungsrecht (BasePermission.ADMINISTRATION: darf die ACL selbst ändern,
+# was der Besitzer in Spring ohne dieses Bit darf) kommen aus der aktiven
+# Rechte-Tabelle: active().owner und active().admin.
 
 # Eine clientid: '@', dann keine Zeichen, die das ACL-Format zerlegen
 CLIENT_ID = re.compile(r"@[^\s|,=#@]+")
@@ -90,10 +88,10 @@ class Acl:
             principal, perm = split_token(token)
             if perm is not None and 0 < perm <= MAX_PERM and principal.startswith("@"):
                 rights[principal] = (rights.get(principal, (0, False))[0] | perm, False)
-        # Der Besitzer hat immer mindestens OWNER_PERM, auch wenn er zusätzlich
-        # mit =1 gelistet ist; weitere Bits aus seinen Einträgen kommen dazu
+        # Der Besitzer hat immer mindestens das Besitzer-Recht, auch wenn er
+        # zusätzlich mit =1 gelistet ist; weitere Bits seiner Einträge kommen dazu
         if CLIENT_ID.fullmatch(self.owner):
-            rights[self.owner] = (rights.get(self.owner, (0, False))[0] | OWNER_PERM, True)
+            rights[self.owner] = (rights.get(self.owner, (0, False))[0] | active().owner, True)
         return rights
 
 
