@@ -3,7 +3,9 @@
 # test.sh
 #
 # Legt in HDFS Testdaten für die Auswertung von ACL-Metadaten an:
-#   - $BASE_DIR/account1..10, darunter je container1..50
+#   - $BASE_DIR/account1..10, darunter je container1..52, unter container1,
+#     container5 und container10 je ein Unterordner sub (dritte Ebene)
+#   - $BASE_DIR/invalid mit fehlerhaften ACLs
 #   - setzt das xattr $ACL_ATTR nach festem Schema (siehe unten) per
 #     "hdfs dfs -setfattr", parallel über xargs
 #   - schreibt die Vergleichsdateien nach $OUT_DIR:
@@ -43,6 +45,19 @@
 #                        (Masken > 3: cl(n+1) 5|16=21, Besitzer 3|8=11;
 #                        LDAP-Teile ohne Warnung ignoriert)
 #                c==49   cl(n+8)|  (nur Besitzer, keine Einträge)
+#                c==51   cl(n+1)|cl(n)=1,#ops=1  (Migration cl(n) -> cl(n+1):
+#                        NEU ist schon Besitzer, ALT nur Eintrag)
+#                c==52   cl(n)|cl(n+1)=1  (ALT Besitzer, NEU schon Eintrag)
+#   sub (dritte Ebene, container<c>/sub):
+#                c==1    ohne ACL -> erbt vom Container
+#                c==5    ohne ACL -> erbt über zwei Ebenen vom Account
+#                        (unter account10 niemand)
+#                c==10   cl(n+2)|cl(n+3)=1,#ops=3  (eigene ACL unter einem
+#                        erbenden Container)
+#   invalid/<name> (fehlerhafte ACLs, Rechte von Hand festgelegt, siehe
+#   acl_invalid): kein '|', kein Besitzer, ungültige Einträge, Recht 0 oder
+#   > 2^31-1, Leerzeichen, weitere LDAP-Teile; invalid/noowner/sub erbt
+#   Fehlerhafte Teile geben keine Rechte, der Rest der ACL gilt.
 #
 # Optionen:
 #   --clean        $BASE_DIR vorher komplett löschen (-skipTrash)
@@ -57,6 +72,7 @@
 #   ACL_ATTR      Name des xattr (Default user.acl)
 #   PARALLEL      parallele setfattr-Aufrufe (Default 8)
 #   OUT_DIR       Ziel der Vergleichsdateien (Default <skriptordner>/testdata)
+#   (hdfs-acl läuft hier mit DEPTH=3, wegen der Unterordner sub)
 #   HADOOP_REPO   Checkout des Hadoop-Clusters (Default ~/git/hadoop)
 #   HADOOP_VERSION   Version des Hadoop-Clients (Default 3.4.2)
 #   HADOOP_HOME   Hadoop-Client (Default $HADOOP_REPO/downloads/hadoop-$HADOOP_VERSION)
@@ -72,7 +88,12 @@
 set -euo pipefail
 
 readonly ACCOUNTS=10
-readonly CONTAINERS=50
+readonly CONTAINERS=52
+# Container, die einen Unterordner sub haben (siehe acl_sub)
+readonly SUB_CONTAINERS=(1 5 10)
+readonly INVALID_NAMES=(nopipe noowner badentry range spaces ldap)
+# Ebenen unter BASE_DIR: account/container/sub
+readonly TEST_DEPTH=3
 readonly CLIENTS=10
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
@@ -164,6 +185,16 @@ acl_container() {
         OWNER=$(cl $((n + 8)))
         return
     fi
+    if (( c == 51 )); then
+        OWNER=$(cl $((n + 1)))
+        ENTRIES=("$(cl "$n")=1" "#ops=1")
+        return
+    fi
+    if (( c == 52 )); then
+        OWNER=$(cl "$n")
+        ENTRIES=("$(cl $((n + 1)))=1")
+        return
+    fi
     case $(( c % 5 )) in
         0) HAS_ACL=0 ;;
         1) OWNER=$(cl "$n")
@@ -174,6 +205,38 @@ acl_container() {
            ENTRIES=("$(cl $((n + 6)))=3" "$(cl $((n + 7)))=1" "#ops=1") ;;
         4) OWNER='#admins'
            ENTRIES=("peter=3" "#ops=1") ;;
+    esac
+}
+
+acl_sub() {
+    local n=$1 c=$2
+    OWNER=""
+    ENTRIES=()
+    HAS_ACL=0
+    if (( c == 10 )); then
+        HAS_ACL=1
+        OWNER=$(cl $((n + 2)))
+        ENTRIES=("$(cl $((n + 3)))=1" "#ops=3")
+    fi
+}
+
+# acl_invalid <name>: RAW = gesetzter Wert, RIGHTS = erwartete Rechte als
+# Zeilen "<clientid>;<recht>". Von Hand statt über grants(), denn hier wird
+# gerade das Zerlegen geprüft. Ungültige Teile geben keine Rechte.
+acl_invalid() {
+    case $1 in
+        nopipe)   RAW='@inv1=3'                    # Besitzer "@inv1=3" ist keine clientid
+                  RIGHTS='' ;;
+        noowner)  RAW='|@inv2=3,#ops=1'
+                  RIGHTS='@inv2;3' ;;
+        badentry) RAW='@inv3|@inv4,@inv5=abc,=2,@inv6=1'
+                  RIGHTS=$'@inv3;3\n@inv6;1' ;;
+        range)    RAW='@inv3|@inv4=0,@inv5=2147483648,@inv6=2147483647'
+                  RIGHTS=$'@inv3;3\n@inv6;2147483647' ;;
+        spaces)   RAW='@inv3| @inv4=1 , @inv5 = 1'  # um ',' egal, um '=' ungültig
+                  RIGHTS=$'@inv3;3\n@inv4;1' ;;
+        ldap)     RAW='@inv3|uid=hans,CN=Doc,O=firma=1,cn=3,@inv4=1'  # cn=3: User "cn"
+                  RIGHTS=$'@inv3;3\n@inv4;1' ;;
     esac
 }
 
@@ -201,22 +264,41 @@ grants() {
     done
 }
 
-# expected_rows <pfad> <acl_von>: Zeilen für die aktuell gesetzte OWNER/ENTRIES
-expected_rows() {
-    local grant
-    (( HAS_ACL )) || return 0
-    while IFS= read -r grant; do
-        echo "$1;$grant;$2"
-    done < <(grants)
-}
-
 # Nach Pfad (natürliche Reihenfolge), dann clientid.
 sort_rows() {
     LC_ALL=C sort -t';' -k1,1V -k2,2V
 }
 
+# record <pfad>: schreibt die Zeile für acls.csv aus OWNER/ENTRIES/HAS_ACL
+# und merkt sich die Rechte dieser ACL für expected_rows
+record() {
+    if (( HAS_ACL )); then
+        echo "$1;$(acl_string)" >> "$acls_body"
+        GRANTS[$1]=$(grants)
+    else
+        echo "$1;" >> "$acls_body"
+    fi
+}
+
+# expected_rows <pfad> <acl_von>: Zeilen für expected.csv; leeres acl_von
+# heißt, kein Vorfahr hat eine ACL
+expected_rows() {
+    local grant
+    [[ -n $2 ]] || return 0
+    while IFS= read -r grant; do
+        [[ -z $grant ]] || echo "$1;$grant;$2"
+    done <<< "${GRANTS[$2]}"
+}
+
+# from <pfad> <acl_von des elternordners>: acl_von für den gerade gesetzten
+# OWNER/ENTRIES/HAS_ACL
+from() {
+    if (( HAS_ACL )); then echo "$1"; else echo "$2"; fi
+}
+
 generate() {
-    local n c account path acls_body expected_body
+    local n c s name account container path from_account from_container acls_body expected_body
+    local -A GRANTS=()
     PATHS=()
     acls_body=$(mktemp)
     expected_body=$(mktemp)
@@ -225,27 +307,43 @@ generate() {
         account=$BASE_DIR/account$n
         PATHS+=("$account")
         acl_account "$n"
-        if (( HAS_ACL )); then
-            echo "$account;$(acl_string)" >> "$acls_body"
-        else
-            echo "$account;" >> "$acls_body"
-        fi
-        expected_rows "$account" "$account" >> "$expected_body"
+        record "$account"
+        from_account=$(from "$account" "")
+        expected_rows "$account" "$from_account" >> "$expected_body"
 
         for (( c = 1; c <= CONTAINERS; c++ )); do
-            path=$account/container$c
-            PATHS+=("$path")
+            container=$account/container$c
+            PATHS+=("$container")
             acl_container "$n" "$c"
-            if (( HAS_ACL )); then
-                echo "$path;$(acl_string)" >> "$acls_body"
-                expected_rows "$path" "$path" >> "$expected_body"
-            else
-                echo "$path;" >> "$acls_body"
-                acl_account "$n"
-                expected_rows "$path" "$account" >> "$expected_body"
-            fi
+            record "$container"
+            from_container=$(from "$container" "$from_account")
+            expected_rows "$container" "$from_container" >> "$expected_body"
+
+            for s in "${SUB_CONTAINERS[@]}"; do
+                (( s == c )) || continue
+                path=$container/sub
+                PATHS+=("$path")
+                acl_sub "$n" "$c"
+                record "$path"
+                expected_rows "$path" "$(from "$path" "$from_container")" >> "$expected_body"
+            done
         done
     done
+
+    PATHS+=("$BASE_DIR/invalid")
+    echo "$BASE_DIR/invalid;" >> "$acls_body"
+    for name in "${INVALID_NAMES[@]}"; do
+        path=$BASE_DIR/invalid/$name
+        PATHS+=("$path")
+        acl_invalid "$name"
+        echo "$path;$RAW" >> "$acls_body"
+        GRANTS[$path]=$RIGHTS
+        expected_rows "$path" "$path" >> "$expected_body"
+    done
+    path=$BASE_DIR/invalid/noowner/sub
+    PATHS+=("$path")
+    echo "$path;" >> "$acls_body"
+    expected_rows "$path" "$BASE_DIR/invalid/noowner" >> "$expected_body"
 
     mkdir -p "$OUT_DIR"
     { echo "path;acl"; sort_rows < "$acls_body"; } > "$ACLS_CSV"
@@ -336,7 +434,7 @@ latest_backup() {
 test_tool() {
     local value
     echo "Teste hdfs-acl gegen den NameNode ..."
-    export BASE_DIR ACL_ATTR HDFS_JAVA_HOME=$JAVA_HOME
+    export BASE_DIR ACL_ATTR HDFS_JAVA_HOME=$JAVA_HOME DEPTH=$TEST_DEPTH
     cd "$WORK_DIR/work"
 
     # fsimage: Checkpoint erzwingen und holen. Das geht nur hier, im echten
