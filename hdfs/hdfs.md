@@ -15,13 +15,14 @@ Hilfsmittel rund um ACL-Metadaten (xattr `user.acl`) auf Ordnern im HDFS.
   beginnen (Groß-/Kleinschreibung egal, optional mit `.` davor), gefolgt von
   einem Wert, der nicht nur aus Ziffern besteht. Sie geben keine Warnung,
   stehen nicht in `entry` und bleiben beim Ändern Wort für Wort erhalten.
-- `recht`: Bitmaske aus der Security-ACL `PermissionFactory`, z. B.
-  `3` = lesen + schreiben + löschen, `1` = nur lesen. Erlaubt ist jede Maske
-  von 1 bis 2147483647 (Java-`int`), also auch weitere Bits wie `16`.
+- `recht`: Bitmaske aus der Security-ACL `PermissionFactory`. Was welches
+  Bit bedeutet, steht in der [Rechte-Tabelle](#rechte-tabelle). Erlaubt ist
+  jede Maske von 1 bis 2147483647 (Java-`int`), auch Bits ohne Namen.
 - Steht eine clientid mehrfach in der ACL, gelten alle ihre Bits zusammen
   (bitweises ODER): `@a=5,@a=16` ergibt `21`.
-- Der Besitzer hat immer mindestens `3`. Ist er zusätzlich gelistet, kommen
-  die Bits seiner Einträge dazu: Besitzer mit `=8` ergibt `11`.
+- Der Besitzer hat immer mindestens das Besitzer-Recht (`owner` in der
+  Rechte-Tabelle, Default `3`). Ist er zusätzlich gelistet, kommen die Bits
+  seiner Einträge dazu: Besitzer mit `=8` ergibt `11`.
 - Ausgewertet werden nur `@clientid`s, User und Gruppen werden ignoriert.
 - Ein Container ohne ACL erbt die ACL seines Accounts. Ein Container mit
   eigener ACL ersetzt die des Accounts komplett.
@@ -52,6 +53,47 @@ Nachgelesen im Quelltext von Spring Security (`acl/…/domain`, Branch `main`):
 
 Deshalb bekommt NEU bei `add` dort, wo ALT Besitzer ist, `3` + `16` = `19`.
 
+### Rechte-Tabelle
+
+Welcher Wert was bedeutet, ist konfigurierbar, passend zur
+`PermissionFactory` der Anwendung. Ohne Konfiguration gilt der
+Spring-Standard, wie in `permissions.json`:
+
+```json
+{
+  "permissions": {"READ": 1, "WRITE": 2, "CREATE": 4, "DELETE": 8, "ADMINISTRATION": 16},
+  "owner": "READ+WRITE",
+  "admin": "ADMINISTRATION"
+}
+```
+
+| Schlüssel     | Bedeutung                                                         |
+|---------------|-------------------------------------------------------------------|
+| `permissions` | Name → Maske; einzelne Bits oder Kombinationen (`"VOLL": 3`)      |
+| `owner`       | Recht, das der Besitzer immer hat (Default `3`)                   |
+| `admin`       | Verwaltungsrecht, das `add` NEU zusätzlich gibt, wo ALT Besitzer ist (Default `16`) |
+
+`owner` und `admin` gehen als Zahl oder als Namen (`"READ+WRITE"`, auch mit
+`|` oder `,` getrennt). Fehlende Schlüssel bekommen den Default. Namen sind
+bei der Eingabe unabhängig von Groß-/Kleinschreibung.
+
+Gesucht wird in dieser Reihenfolge: `--permissions DATEI`,
+`$HDFS_ACL_PERMISSIONS`, `permissions.json` neben der DB, sonst eingebaut.
+Gilt für alle Kommandos und für `migrate_check.py`.
+
+Wirkung:
+
+- `search` hat eine Spalte `rights` mit den Namen (`19` →
+  `READ+WRITE+ADMINISTRATION`), `show` zeigt sie in Klammern
+  (`@client3=19 [READ+WRITE+ADMINISTRATION]`). Bits ohne Namen bleiben als
+  Zahl stehen (`35` → `READ+WRITE+32`), ein passender Kombinationsname
+  gewinnt (`VOLL+ADMINISTRATION`).
+- `search --perm` und `--has-bits` nehmen auch Namen: `--has-bits ADMINISTRATION`.
+- `owner` steckt in den effektiven Rechten der DB. Wird die Tabelle nach
+  `collect` mit anderem `owner` gewechselt, warnen die lesenden Kommandos:
+  dann `collect` erneut ausführen.
+- `export` bleibt numerisch (Vergleich mit `testdata/expected.csv`).
+
 ## hdfs-acl – ACLs einsammeln, suchen, migrieren
 
 Paket `src/hdfs/`, nur Standardbibliothek, läuft ab Python 3.9 (RHEL 9).
@@ -68,6 +110,7 @@ uv run hdfs-acl <kommando> ...
 | `main.py`        | Einstieg: Argumente (argparse), Fehlerbehandlung                   |
 | `commands.py`    | ein `cmd_*` je Kommando, gemeinsamer Ablauf `execute()` fürs Ändern |
 | `acl.py`         | ACL-Format parsen/prüfen, effektive Rechte, Vererbung              |
+| `permissions.py` | Rechte-Tabelle: Namen der Bits, Besitzer-/Verwaltungsrecht (JSON) |
 | `changes.py`     | `Change` und `plan_*`: was `add`/`replace`/`remove`/`restore` ändern |
 | `fsimage.py`     | XML von `hdfs oiv` als Stream lesen, Pfade zusammensetzen          |
 | `hdfs_client.py` | `hdfs oiv`, `hdfs dfs -getfattr/-setfattr` aufrufen, Java suchen   |
@@ -182,6 +225,8 @@ hdfs-acl search client3 --own           # nur aktiv gesetzte, mit Roh-ACL
 hdfs-acl search '@*' --own --format csv # alle aktiv gesetzten ACLs pro clientid
 hdfs-acl search '@client*' --perm 3     # Glob, nur genau Maske 3
 hdfs-acl search '@*' --has-bits 16      # alle, deren Maske Bit 16 enthält
+hdfs-acl search '@*' --has-bits ADMINISTRATION   # dasselbe über den Namen
+hdfs-acl search '@*' --perm read+write  # Namen aus der Rechte-Tabelle
 hdfs-acl search @client3 --format csv   # oder json
 hdfs-acl clients                         # alle clientids mit Anzahl Pfade je Maske ("3:40 19:2")
 hdfs-acl show /fs/account3/container10   # ACL, Herkunft und Rechte eines Pfads
