@@ -33,72 +33,56 @@ class MergeEntriesTest(unittest.TestCase):
 class PlanAddTest(unittest.TestCase):
     def test_source_is_owner_gets_19(self):
         nodes = {"/fs/a": "@client3|@test1=1,@test2=2"}
-        changes, found, excess = plan_add(nodes, "@client3", "@newapp")
-        self.assertEqual((found, excess), (1, []))
+        changes, found = plan_add(nodes, "@client3", "@newapp")
+        self.assertEqual(found, 1)
         self.assertEqual(changes, [Change("/fs/a", "@client3|@test1=1,@test2=2",
                                           "@client3|@test1=1,@test2=2,@newapp=19")])
 
     def test_entry_appended(self):
-        changes, _, _ = plan_add({"/fs/a": f"@o|@client3=1,{OPS}=3"}, "@client3", "@newapp")
+        changes, _ = plan_add({"/fs/a": f"@o|@client3=1,{OPS}=3"}, "@client3", "@newapp")
         self.assertEqual(new_values(changes), {"/fs/a": f"@o|@client3=1,{OPS}=3,@newapp=1"})
 
     def test_missing_bits_added_in_place(self):
-        changes, _, _ = plan_add({"/fs/a": "@o|@newapp=4,@client3=1"}, "@client3", "@newapp")
+        changes, _ = plan_add({"/fs/a": "@o|@newapp=4,@client3=1"}, "@client3", "@newapp")
         self.assertEqual(new_values(changes), {"/fs/a": "@o|@newapp=5,@client3=1"})
 
     def test_already_covered(self):
-        changes, found, _ = plan_add({"/fs/a": "@o|@client3=1,@newapp=3"}, "@client3", "@newapp")
+        changes, found = plan_add({"/fs/a": "@o|@client3=1,@newapp=3"}, "@client3", "@newapp")
         self.assertEqual((changes, found), ([], 1))
 
     def test_idempotent(self):
         nodes = {"/fs/a": "@client3|@x=1", "/fs/a/c": "@y|@client3=1", "/fs/b": "@o|@client3=3"}
-        changes, _, _ = plan_add(nodes, "@client3", "@newapp")
+        changes, _ = plan_add(nodes, "@client3", "@newapp")
         nodes.update(new_values(changes))
-        self.assertEqual(plan_add(nodes, "@client3", "@newapp")[:2], ([], 3))
+        self.assertEqual(plan_add(nodes, "@client3", "@newapp"), ([], 3))
 
     def test_inheriting_and_unrelated_paths_untouched(self):
         nodes = {"/fs/a": None, "/fs/b": "@o|@x=1"}
-        self.assertEqual(plan_add(nodes, "@client3", "@newapp"), ([], 0, []))
+        self.assertEqual(plan_add(nodes, "@client3", "@newapp"), ([], 0))
 
     def test_ldap_groups_and_users_kept(self):
         raw = f"@o|cn=doc,ou=hell,dc=firma=3,svc=1,{OPS}=1,@client3=1"
-        changes, _, _ = plan_add({"/fs/a": raw}, "@client3", "@newapp")
+        changes, _ = plan_add({"/fs/a": raw}, "@client3", "@newapp")
         self.assertEqual(changes[0].new, raw + ",@newapp=1")
 
-    def test_container_inherits_from_account(self):
-        # Container nennt keinen der beiden: der Eintrag im Account reicht
-        nodes = {"/fs/a": "@o|@client3=3", "/fs/a/c": "@o|@x=1", "/fs/a/d": None}
-        changes, _, excess = plan_add(nodes, "@client3", "@newapp")
-        self.assertEqual((new_values(changes), excess), ({"/fs/a": "@o|@client3=3,@newapp=3"}, []))
+    def test_only_explicit_rights(self):
+        # Container nennen QUELLE nicht: nichts tun, auch wenn sie erbt oder
+        # NEU dort selbst gelistet ist
+        nodes = {"/fs/a": "@o|@client3=3", "/fs/a/c": "@o|@newapp=1", "/fs/a/d": "@x|", "/fs/a/e": None}
+        changes, _ = plan_add(nodes, "@client3", "@newapp")
+        self.assertEqual(new_values(changes), {"/fs/a": "@o|@client3=3,@newapp=3"})
 
     def test_container_restriction_copied(self):
         nodes = {"/fs/a": "@o|@client3=3", "/fs/a/c": "@o|@client3=1"}
-        changes, _, _ = plan_add(nodes, "@client3", "@newapp")
+        changes, _ = plan_add(nodes, "@client3", "@newapp")
         self.assertEqual(new_values(changes), {"/fs/a": "@o|@client3=3,@newapp=3",
                                                "/fs/a/c": "@o|@client3=1,@newapp=1"})
 
-    def test_container_override_of_new_raised(self):
-        # NEU ist im Container auf 1 gesetzt, QUELLE erbt dort 3 vom Account
-        nodes = {"/fs/a": "@o|@client3=3", "/fs/a/c": "@o|@newapp=1"}
-        changes, _, _ = plan_add(nodes, "@client3", "@newapp")
-        self.assertEqual(new_values(changes), {"/fs/a": "@o|@client3=3,@newapp=3",
-                                               "/fs/a/c": "@o|@newapp=3"})
-
-    def test_owner_bits_restricted_in_container_with_other_owner(self):
-        # QUELLE ist Besitzer des Accounts; im Container mit eigenem Besitzer
-        # hat sie nur ihren Eintrag =1, NEU darf dort nicht 19 erben
-        nodes = {"/fs/a": "@client3|@client3=1", "/fs/a/c": "@x|"}
-        changes, _, excess = plan_add(nodes, "@client3", "@newapp")
-        self.assertEqual(new_values(changes), {"/fs/a": "@client3|@client3=1,@newapp=19",
-                                               "/fs/a/c": "@x|@newapp=1"})
-        self.assertEqual(excess, [])
-
-    def test_excess_reported(self):
-        # QUELLE hat im Container nichts: NEU erbt 19, einschränken geht nicht
-        nodes = {"/fs/a": "@client3|", "/fs/a/c": "maria|@y=1", "/fs/a/d": "|@y=1"}
-        changes, _, excess = plan_add(nodes, "@client3", "@newapp")
-        self.assertEqual(new_values(changes), {"/fs/a": "@client3|@newapp=19"})
-        self.assertEqual(excess, ["/fs/a/c"])  # /fs/a/d erbt den Besitzer, dort passt 19
+    def test_inherited_owner_not_explicit(self):
+        # leerer Besitzer im Container: QUELLE ist dort nur geerbter Besitzer
+        nodes = {"/fs/a": "@client3|", "/fs/a/c": "|@y=1"}
+        changes, found = plan_add(nodes, "@client3", "@newapp")
+        self.assertEqual((new_values(changes), found), ({"/fs/a": "@client3|@newapp=19"}, 1))
 
 
 class PlanReplaceTest(unittest.TestCase):
@@ -110,7 +94,7 @@ class PlanReplaceTest(unittest.TestCase):
         changes = plan_replace({"/fs/a": "@client3|@x=1"}, "@client3", "@newapp")
         self.assertEqual(new_values(changes), {"/fs/a": "@newapp|@x=1"})
 
-    def test_after_add_keeps_bit_16(self):
+    def test_after_add_keeps_entry(self):
         changes = plan_replace({"/fs/a": "@client3|@test1=1,@test2=2,@newapp=19"}, "@client3", "@newapp")
         self.assertEqual(new_values(changes), {"/fs/a": "@newapp|@test1=1,@test2=2,@newapp=19"})
 
@@ -123,15 +107,11 @@ class PlanReplaceTest(unittest.TestCase):
         changes = plan_replace({"/fs/a": "@client3|@newapp=3"}, "@client3", "@newapp")
         self.assertEqual(new_values(changes), {"/fs/a": "@newapp|@newapp=3"})
 
-    def test_inherited_bits_of_new_kept_in_container(self):
-        nodes = {"/fs/a": "@o|@newapp=4", "/fs/a/c": "@o|@client3=1"}
+    def test_only_explicit_rights(self):
+        # Container nennt nur NEU: bleibt, obwohl ALT dort vorher geerbt hat
+        nodes = {"/fs/a": "@o|@client3=4", "/fs/a/c": "@o|@newapp=1", "/fs/a/d": None}
         changes = plan_replace(nodes, "@client3", "@newapp")
-        self.assertEqual(new_values(changes), {"/fs/a/c": "@o|@newapp=5"})
-
-    def test_container_override_of_new_raised(self):
-        nodes = {"/fs/a": "@o|@client3=4", "/fs/a/c": "@o|@newapp=1"}
-        changes = plan_replace(nodes, "@client3", "@newapp")
-        self.assertEqual(new_values(changes), {"/fs/a": "@o|@newapp=4", "/fs/a/c": "@o|@newapp=5"})
+        self.assertEqual(new_values(changes), {"/fs/a": "@o|@newapp=4"})
 
     def test_unrelated_untouched(self):
         self.assertEqual(plan_replace({"/fs/a": "@o|@x=1", "/fs/b": None}, "@client3", "@newapp"), [])

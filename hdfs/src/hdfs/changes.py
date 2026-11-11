@@ -9,19 +9,17 @@ Gemeinsame Regeln:
   über ihren Elternordner automatisch mit.
 - Einträge für User, Gruppen und andere clientids bleiben Wort für Wort
   und an ihrer Stelle erhalten.
-- Container-ACLs erweitern oder schränken die geerbte ACL ein (acl.inherit).
-  Ein Eintrag im Account wirkt deshalb in jedem Container, der die clientid
-  nicht selbst nennt. add und replace planen darum über den ganzen Baum
-  (align): Wo die Vererbung NEU zu viele oder zu wenige Rechte gäbe, bekommt
-  die Container-ACL einen eigenen Eintrag für NEU.
+- add und replace übertragen nur explizite Rechte: was ALT in einer ACL
+  selbst stehen hat (Besitzer oder Eintrag). Geerbte Rechte lösen nichts
+  aus, jede ACL wird für sich umgeschrieben. Container, die ALT nicht
+  nennen, erben NEU vom Account wie zuvor ALT.
 """
 
 from __future__ import annotations
 
-import posixpath
 from dataclasses import dataclass
 
-from hdfs.acl import Acl, State, inherit, resolve, rights, split_token
+from hdfs.acl import Acl, covers, split_token
 from hdfs.permissions import active
 
 
@@ -67,101 +65,58 @@ def set_entry(tokens: list, principal: str, mask: int) -> list:
     return result
 
 
-def perm_of(state: State | None, clientid: str) -> int:
-    """Effektives Recht von clientid in einem Stand (0 = keins)."""
-    return rights(state).get(clientid, (0, False, None))[0]
-
-
-def align(nodes: dict, planned: dict, clientid: str, want: dict) -> tuple:
-    """Gleicht die Rechte von clientid nach dem Plan an want an.
-
-    planned: {pfad: neue roh_acl} für Pfade mit eigener ACL (Ausgangspunkt:
-    unverändert oder schon umgeschrieben). want: {pfad: recht}, das clientid
-    am Ende effektiv haben soll. Von oben nach unten: Weicht das Recht nach
-    Vererbung ab, bekommt die eigene ACL einen Eintrag clientid=want. Ist
-    want 0, lässt sich nichts einschränken (eine Maske 0 gibt es nicht);
-    solche Pfade landen in excess. Liefert (planned, excess).
-    """
-    states = {}
-    excess = []
-    for path in sorted(nodes, key=lambda p: p.count("/")):
-        parent = states.get(posixpath.dirname(path))
-        raw = planned.get(path)
-        if raw is None:
-            states[path] = parent
-            continue
-        acl = Acl.parse(raw)
-        state = inherit(parent, path, acl)
-        have, need = perm_of(state, clientid), want.get(path, 0)
-        if have != need:
-            if need:
-                acl = Acl(acl.owner, set_entry(acl.tokens, clientid, need))
-                planned[path] = acl.render()
-                state = inherit(parent, path, acl)
-            else:
-                excess.append(path)
-        states[path] = state
-    return planned, excess
-
-
-def to_changes(nodes: dict, planned: dict) -> list:
-    return [Change(path, nodes[path], new) for path, new in planned.items() if new != nodes[path]]
-
-
 def plan_add(nodes: dict, source: str, new: str) -> tuple:
-    """NEU bekommt überall die Rechte (alle Bits) von QUELLE dazu (Migration).
+    """NEU bekommt in jeder ACL, die QUELLE explizit nennt, deren Bits dazu (Migration).
 
     Phase 1 einer Migration: beide clientids greifen. Eine ACL hat nur einen
     Besitzer, ist QUELLE Besitzer, bleibt sie es. NEU bekommt dort einen
-    Eintrag mit den Rechten des Besitzers plus dem Verwaltungsrecht
+    Eintrag mit dem Recht des Besitzers plus dem Verwaltungsrecht
     (active().admin), damit NEU die ACL verwalten kann wie der Besitzer.
     Erst replace macht NEU zum Besitzer.
 
-    Ziel je Pfad: NEU hat effektiv seine bisherigen Rechte | die von QUELLE.
-    Meist reicht ein Eintrag im Account, Container erben ihn. Container, die
-    QUELLE oder NEU selbst nennen oder einen anderen Besitzer haben, bekommen
-    bei Bedarf einen eigenen Eintrag für NEU.
+    Nur explizite Rechte: Gezählt werden der Besitzer und die Einträge dieser
+    ACL, nichts Geerbtes. Schränkt ein Container QUELLE ein (@quelle=1),
+    bekommt NEU dort denselben Eintrag.
 
-    Liefert (changes, found, excess). found = Anzahl ACLs, in denen QUELLE
-    vorkommt, damit der Aufrufer "QUELLE steht nirgends" von "schon alles
-    erledigt" unterscheiden kann. excess = Pfade, an denen NEU über die
-    Vererbung mehr bekommt, als sich einschränken lässt: QUELLE und NEU hatten
-    dort nichts (z. B. Container mit eigenem Besitzer unter einem Account, dessen
-    Besitzer QUELLE ist). Herabgestuft wird nie, mehrfaches Ausführen ist
+    Liefert (changes, found); found = Anzahl ACLs, in denen QUELLE vorkommt,
+    damit der Aufrufer "QUELLE steht nirgends" von "schon alles erledigt"
+    unterscheiden kann. Herabgestuft wird nie, mehrfaches Ausführen ist
     unschädlich.
     """
-    before = resolve(nodes)
-    want = {}
-    for path, state in before.items():
-        r = rights(state)
-        perm, source_owns, _ = r.get(source, (0, False, None))
+    changes = []
+    found = 0
+    for path, raw in nodes.items():
+        if raw is None:
+            continue  # erbt; wird über den Elternordner mitgeändert
+        acl = Acl.parse(raw)
+        rights = acl.client_rights()
+        if source not in rights:
+            continue
+        found += 1
+        # explizites Recht in dieser ACL: ist QUELLE Besitzer, bekommt NEU das
+        # Besitzer-Recht plus Verwaltungsrecht (=19)
+        perm, source_owns = rights[source]
         if source_owns:
             perm |= active().admin
-        want[path] = perm | r.get(new, (0, False, None))[0]
-    found = 0
-    for raw in nodes.values():
-        if raw is not None:
-            acl = Acl.parse(raw)
-            found += acl.owner == source or source in acl.client_entries()
-    planned = {path: raw for path, raw in nodes.items() if raw is not None}
-    planned, excess = align(nodes, planned, new, want)
-    return to_changes(nodes, planned), found, excess
+        if covers(rights.get(new, (0, False))[0], perm):
+            continue
+        # anhängen; vorhandene Einträge von NEU werden an ihrer Stelle um die
+        # fehlenden Bits ergänzt. Ist NEU Besitzer, bleibt der Eintrag trotzdem,
+        # denn er trägt Bits, die das Besitzer-Recht nicht hat.
+        tokens = merge_entries(acl.tokens + [f"{new}={perm}"], new)
+        changes.append(Change(path, raw, Acl(acl.owner, tokens).render()))
+    return changes, found
 
 
 def plan_replace(nodes: dict, old: str, new: str) -> list:
-    """ALT wird überall durch NEU ersetzt, als Eintrag und als Besitzer.
-
-    NEU hat danach überall genau die Rechte von ALT plus seine eigenen.
-    """
-    before = resolve(nodes)
-    want = {path: perm_of(state, old) | perm_of(state, new) for path, state in before.items()}
-    planned = {}
+    """ALT wird in jeder ACL, die ALT explizit nennt, durch NEU ersetzt,
+    als Eintrag und als Besitzer. Geerbtes bleibt unberührt."""
+    changes = []
     for path, raw in nodes.items():
         if raw is None:
             continue  # erbt; wird über den Elternordner mitgeändert
         acl = Acl.parse(raw)
         if acl.owner != old and all(split_token(t)[0] != old for t in acl.tokens):
-            planned[path] = raw
             continue
         owner = new if acl.owner == old else acl.owner
         # ALT an derselben Stelle in NEU umbenennen; hatte NEU schon einen
@@ -170,9 +125,8 @@ def plan_replace(nodes: dict, old: str, new: str) -> list:
         for token in acl.tokens:
             principal, perm = split_token(token)
             tokens.append(f"{new}={perm}" if principal == old and perm is not None else token)
-        planned[path] = Acl(owner, merge_entries(tokens, new)).render()
-    planned, _ = align(nodes, planned, new, want)
-    return to_changes(nodes, planned)
+        changes.append(Change(path, raw, Acl(owner, merge_entries(tokens, new)).render()))
+    return changes
 
 
 def plan_remove(nodes: dict, clientid: str, new_owner: str | None) -> tuple:

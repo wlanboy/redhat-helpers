@@ -112,7 +112,7 @@ class ActiveTableTest(unittest.TestCase):
         self.assertEqual(Acl.parse("@a|@b=1").client_rights(), {"@b": (1, False), "@a": (7, True)})
 
     def test_add_uses_admin(self):
-        changes, _, _ = plan_add({"/fs/a": "@old|@x=1"}, "@old", "@new")
+        changes, _ = plan_add({"/fs/a": "@old|@x=1"}, "@old", "@new")
         self.assertEqual(changes[0].new, "@old|@x=1,@new=71")
 
 
@@ -135,11 +135,11 @@ class CommandTest(unittest.TestCase):
     def test_search_by_name(self):
         rc, out, _ = self.run_main("search", "@*", "--has-bits", "ADMIN", "--format", "csv")
         self.assertEqual(rc, 0)
-        self.assertIn("/fs/a;@client3;19;ADMIN;0;/fs/a", out)
-        self.assertIn("/fs/a;@client1;19;ADMIN;1;/fs/a", out)  # Besitzer hat 19
-        self.assertNotIn("@client2", out)
+        self.assertIn("/fs/a;@client3;19;ADMIN;0;", out)
+        self.assertIn("/fs/a;@client1;19;ADMIN;1;", out)  # Besitzer hat 19
+        self.assertNotIn(";@client2;", out)
         _, out, _ = self.run_main("search", "@*", "--perm", "read", "--format", "csv")
-        self.assertEqual(len(out.splitlines()), 3)  # Kopf + /fs/a und /fs/a/c von @client2
+        self.assertEqual(len(out.splitlines()), 2)  # Kopf + /fs/a; /fs/a/c erbt nur
 
     def test_search_unknown_name(self):
         rc, _, err = self.run_main("search", "@*", "--perm", "LOESCHEN")

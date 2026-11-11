@@ -15,16 +15,7 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from hdfs.acl import (
-    Acl,
-    acl_problems,
-    is_ldap,
-    principal_kind,
-    resolve,
-    resolve_acl_from,
-    rights,
-    split_token,
-)
+from hdfs.acl import Acl, acl_problems, is_ldap, principal_kind, split_token
 from hdfs.changes import Change
 from hdfs.common import UsageError, info
 from hdfs.permissions import active
@@ -34,17 +25,15 @@ CREATE TABLE meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
--- alle eingesammelten Pfade; acl NULL = kein Attribut,
--- acl_from = nächster Pfad mit eigener ACL, selbst oder Vorfahr (NULL = keiner)
+-- alle eingesammelten Pfade; acl NULL = kein Attribut
 CREATE TABLE node (
     path     TEXT PRIMARY KEY,
     parent   TEXT,
     depth    INTEGER NOT NULL,
     acl      TEXT,
-    acl_from TEXT,
     problems TEXT
 );
--- eigene ACL-Einträge (client/user/group, ohne LDAP), Besitzer mit owner = 1
+-- ACL-Einträge (client/user/group, ohne LDAP), Besitzer mit owner = 1
 CREATE TABLE entry (
     path      TEXT NOT NULL,
     principal TEXT NOT NULL,
@@ -52,18 +41,17 @@ CREATE TABLE entry (
     perm      INTEGER NOT NULL,
     owner     INTEGER NOT NULL
 );
--- effektive Rechte je clientid inkl. Vererbung (Container-ACLs erweitern oder
--- schränken die geerbte ein); acl_from = tiefster Pfad, dessen ACL beiträgt
-CREATE TABLE effective (
+-- Rechte je @clientid und ACL: Einträge verodert, Besitzer mit Besitzer-Recht;
+-- nur was an einem Pfad selbst steht, nichts Geerbtes
+CREATE TABLE rights (
     path     TEXT NOT NULL,
     clientid TEXT NOT NULL,
     perm     INTEGER NOT NULL,
     owner    INTEGER NOT NULL,
-    acl_from TEXT NOT NULL,
     PRIMARY KEY (path, clientid)
 );
 CREATE INDEX entry_principal ON entry (principal);
-CREATE INDEX effective_clientid ON effective (clientid);
+CREATE INDEX rights_clientid ON rights (clientid);
 """
 
 
@@ -78,41 +66,27 @@ def save(db: Path, base: str, attr: str, depth: int, origin: str, nodes: dict) -
     con = sqlite3.connect(tmp)
     con.executescript(SCHEMA)
 
-    acl_from = resolve_acl_from(nodes)
-    states = resolve(nodes)
-    # Viele Container erben denselben Stand: deren Rechte nur einmal berechnen.
-    # Pfade mit demselben acl_from haben denselben Stand.
-    rights_cache = {}
     for path, raw in nodes.items():
         parent = posixpath.dirname(path)
-        state = states[path]
         problems = acl_problems(raw) if raw is not None else []
-        if raw is not None and (state is None or not state.owner):
-            problems.append("kein Besitzer (auch nicht geerbt)")
         con.execute(
-            "INSERT INTO node VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO node VALUES (?, ?, ?, ?, ?)",
             (path, parent if parent in nodes else None, path[len(base):].count("/"),
-             raw, acl_from[path], "; ".join(problems) or None),
+             raw, "; ".join(problems) or None),
         )
-        # entry: was wirklich an diesem Pfad steht (ohne Vererbung)
-        if raw is not None:
-            acl = Acl.parse(raw)
-            if acl.owner and not is_ldap(acl.owner):
-                con.execute("INSERT INTO entry VALUES (?, ?, ?, ?, 1)",
-                            (path, acl.owner, principal_kind(acl.owner), active().owner))
-            for token in acl.tokens:
-                principal, perm = split_token(token)
-                if perm is not None and not is_ldap(token):
-                    con.execute("INSERT INTO entry VALUES (?, ?, ?, ?, 0)",
-                                (path, principal, principal_kind(principal), perm))
-        # effective: was an diesem Pfad gilt, alle ACLs von oben zusammengeführt
-        source = acl_from[path]
-        if source is not None:
-            if source not in rights_cache:
-                rights_cache[source] = rights(state)
-            for clientid, (perm, owner, from_path) in rights_cache[source].items():
-                con.execute("INSERT INTO effective VALUES (?, ?, ?, ?, ?)",
-                            (path, clientid, perm, int(owner), from_path))
+        if raw is None:
+            continue
+        acl = Acl.parse(raw)
+        if acl.owner and not is_ldap(acl.owner):
+            con.execute("INSERT INTO entry VALUES (?, ?, ?, ?, 1)",
+                        (path, acl.owner, principal_kind(acl.owner), active().owner))
+        for token in acl.tokens:
+            principal, perm = split_token(token)
+            if perm is not None and not is_ldap(token):
+                con.execute("INSERT INTO entry VALUES (?, ?, ?, ?, 0)",
+                            (path, principal, principal_kind(principal), perm))
+        for clientid, (perm, owner) in acl.client_rights().items():
+            con.execute("INSERT INTO rights VALUES (?, ?, ?, ?)", (path, clientid, perm, int(owner)))
 
     meta = {
         "base_dir": base,
@@ -120,7 +94,7 @@ def save(db: Path, base: str, attr: str, depth: int, origin: str, nodes: dict) -
         "depth": str(depth),
         "source": origin,
         "collected_at": datetime.now().isoformat(timespec="seconds"),
-        # effective und entry hängen am Besitzer-Recht; open_db() warnt, wenn
+        # rights und entry hängen am Besitzer-Recht; open_db() warnt, wenn
         # später mit einer anderen Tabelle gelesen wird
         "owner_perm": str(active().owner),
     }
@@ -137,6 +111,9 @@ def open_db(db: Path) -> sqlite3.Connection:
         raise UsageError(f"{db} gibt es nicht, erst 'collect' ausführen.")
     # mode=ro: sqlite3.connect würde eine fehlende Datei sonst still neu anlegen
     con = sqlite3.connect(f"{db.resolve().as_uri()}?mode=ro", uri=True)
+    tables = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+    if "rights" not in tables:
+        raise UsageError(f"{db} hat das alte Format (mit Vererbung), erst 'collect' ausführen.")
     meta = dict(con.execute("SELECT key, value FROM meta"))
     info(f"Stand {meta['collected_at']} aus {meta.get('source', '?')}, {meta['base_dir']}, {meta['attr']} ({db})")
     if "owner_perm" in meta and int(meta["owner_perm"]) != active().owner:

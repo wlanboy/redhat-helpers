@@ -13,26 +13,26 @@ Beispiele:
   uv run main.py collect
   uv run main.py collect --live --base-dir /fs      # direkt aus HDFS (kleine Bestände)
 
-  # Pfade, auf die eine clientid Rechte hat
+  # ACLs, in denen eine clientid steht (nur explizit, nichts Geerbtes)
   uv run main.py search @client3
-  uv run main.py search '@client*' --own --format csv
-  uv run main.py search @client2 --has-bits 16      # nur Pfade mit ADMINISTRATION
-  uv run main.py search @client2 --has-bits ADMINISTRATION   # dasselbe über den Namen
+  uv run main.py search '@client*' --format csv
+  uv run main.py search @client2 --has-bits 16      # nur Rechte mit Bit 16
+  uv run main.py search @client2 --perm ADMIN       # genau 19, über den Namen
   uv run main.py show /fs/account1 --permissions eigene-rechte.json  # andere Rechte-Tabelle
 
-  # alle clientids mit Anzahl Pfade
+  # alle clientids mit Anzahl ACLs
   uv run main.py clients --format json
 
   # Anzahl der Einträge in der DB (Pfade, ACLs, Rechte, clientids)
   uv run main.py count
 
-  # ACL und effektive Rechte eines Pfads
+  # ACL eines Pfads und die Rechte daraus
   uv run main.py show /fs/account1/container1
 
-  # effektive Rechte als CSV
+  # Rechte je ACL als CSV
   uv run main.py export -o rechte.csv
 
-  # @neu überall mit den Rechten von @alt ergänzen (erst Plan, dann schreiben)
+  # @neu in jeder ACL, die @alt nennt, mit dessen Rechten ergänzen (erst Plan, dann schreiben)
   uv run main.py add @alt @neu
   uv run main.py add @alt @neu --apply
   export DEPTH=3 HADOOP_CONF_DIR=$PWD/namenode
@@ -40,11 +40,11 @@ Beispiele:
                                                       # statt --apply: Skript mit allen
                                                        # "hadoop fs"-Aufrufen, HDFS bleibt unverändert
 
-  # @alt überall durch @neu ersetzen, auch als Besitzer
+  # @alt in jeder ACL durch @neu ersetzen, auch als Besitzer
   uv run main.py replace @alt @neu --apply
 
-  # clientid entfernen; wo sie Besitzer ist, übernimmt #ops
-  uv run main.py remove @client3 --new-owner '#ops' --apply
+  # clientid entfernen; wo sie Besitzer ist, übernimmt die Gruppe ops
+  uv run main.py remove @client3 --new-owner '.cn=ops,ou=groups,dc=firma' --apply
 
   # Änderungen aus einem Backup zurückdrehen. Das Backup entsteht automatisch
   # bei jedem --apply und --generate neben der DB (Name steht in der Ausgabe).

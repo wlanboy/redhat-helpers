@@ -4,13 +4,15 @@
 ACL-Format: <besitzer>|<eintrag>=<recht>,...  (recht = Bitmaske, Details in hdfs.md)
 Was die Bits bedeuten, legt die Rechte-Tabelle fest (--permissions, hdfs.md).
 
+Ausgewertet wird nur, was an einem Pfad selbst steht, nichts Geerbtes.
+
 Kommandos:
   collect             ACLs aus dem fsimage (oder live) lesen und in SQLite speichern
-  search CLIENTID     Pfade, auf die eine clientid Rechte hat (Wildcards erlaubt)
-  clients             alle clientids mit Anzahl Pfade
+  search CLIENTID     ACLs, die eine clientid nennen (Wildcards erlaubt)
+  clients             alle clientids mit Anzahl ACLs
   count               Anzahl der Einträge in der DB (Pfade, ACLs, Rechte, clientids)
-  show PFAD           ACL und effektive Rechte eines Pfads
-  export              effektive Rechte als CSV (Format wie testdata/expected.csv)
+  show PFAD           ACL eines Pfads und die Rechte daraus
+  export              Rechte je ACL als CSV (Format wie testdata/expected.csv)
   add QUELLE NEU      NEU überall mit den Rechten von QUELLE ergänzen (Migration)
   replace ALT NEU     ALT überall durch NEU ersetzen, auch als Besitzer
   remove CLIENTID     clientid aus allen ACLs entfernen
@@ -109,7 +111,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("search", parents=[db_opts, fmt_opts], help="nach clientid suchen")
     p.add_argument("clientid", help="z. B. @client3 oder '@client*' (Glob)")
-    p.add_argument("--own", action="store_true", help="nur eigene Einträge, ohne Vererbung")
     p.add_argument("--perm", metavar="RECHT",
                    help="nur genau diese Maske, als Zahl oder Namen: 3, READ_WRITE")
     p.add_argument("--has-bits", metavar="RECHT",
@@ -126,7 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("path")
     p.set_defaults(func=cmd_show)
 
-    p = sub.add_parser("export", parents=[db_opts], help="effektive Rechte als CSV")
+    p = sub.add_parser("export", parents=[db_opts], help="Rechte je ACL als CSV")
     p.add_argument("-o", "--output", help="Datei statt stdout")
     p.set_defaults(func=cmd_export)
 

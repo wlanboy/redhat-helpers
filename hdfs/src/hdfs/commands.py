@@ -1,6 +1,7 @@
 """Die Kommandos der Kommandozeile, je eine Funktion cmd_<name>(args) -> Exit-Code.
 
-Lesende Kommandos (search, clients, count, show, export) arbeiten nur auf der DB.
+Lesende Kommandos (search, clients, count, show, export) arbeiten nur auf der DB
+und zeigen nur, was in den ACLs selbst steht, nichts Geerbtes.
 Ändernde Kommandos (add, replace, remove, restore) laufen alle gleich ab:
     1. refresh():  Stand einlesen (fsimage oder live), DB neu schreiben
     2. plan_*():   Liste Change berechnen (changes.py)
@@ -161,8 +162,8 @@ def execute(args: argparse.Namespace, hdfs: Hdfs, label: str, changes: list,
 def cmd_collect(args: argparse.Namespace) -> int:
     refresh(args, Hdfs(args.parallel, args.hadoop_version))
     con = sqlite3.connect(args.db)
-    clients = con.execute("SELECT COUNT(DISTINCT clientid) FROM effective").fetchone()[0]
-    print(f"{clients} clientids mit Rechten.")
+    clients = con.execute("SELECT COUNT(DISTINCT clientid) FROM rights").fetchone()[0]
+    print(f"{clients} clientids in ACLs.")
     problems = con.execute("SELECT path, problems FROM node WHERE problems IS NOT NULL").fetchall()
     for path, problem in sorted(problems, key=lambda r: natural_key(r[0])):
         print(f"Warnung: {path}: {problem}")
@@ -170,58 +171,42 @@ def cmd_collect(args: argparse.Namespace) -> int:
 
 
 def cmd_search(args: argparse.Namespace) -> int:
+    """Pfade, deren ACL die clientid nennt (Besitzer oder Eintrag), mit Roh-ACL."""
     pattern = client_id(args.clientid, allow_glob=True)
     con = open_db(Path(args.db))
-    if args.own:
-        # nur aktiv gesetzte Einträge, letzte Spalte ist die Roh-ACL des Pfads;
-        # Besitzer + zusätzliche Einträge werden zu einer Zeile verodert (SQLite
-        # hat kein bitweises OR als Aggregat)
-        columns = ["path", "clientid", "perm", "rights", "owner", "acl"]
-        merged = {}
-        for path, clientid, perm, owner, acl in con.execute(
-                """SELECT e.path, e.principal, e.perm, e.owner, n.acl
-                   FROM entry e JOIN node n ON n.path = e.path
-                   WHERE e.kind = 'client' AND e.principal GLOB ?""", (pattern,)):
-            old_perm, old_owner, _ = merged.get((path, clientid), (0, 0, acl))
-            merged[(path, clientid)] = (old_perm | perm, old_owner | owner, acl)
-        found = [(path, clientid, *rest) for (path, clientid), rest in merged.items()]
-    else:
-        columns = ["path", "clientid", "perm", "rights", "owner", "acl_from"]
-        found = con.execute(
-            "SELECT path, clientid, perm, owner, acl_from FROM effective WHERE clientid GLOB ?",
-            (pattern,))
+    found = con.execute(
+        """SELECT r.path, r.clientid, r.perm, r.owner, n.acl
+           FROM rights r JOIN node n ON n.path = r.path
+           WHERE r.clientid GLOB ?""", (pattern,))
     # --perm/--has-bits als Zahl oder Namen aus der Rechte-Tabelle
     table = active()
     exact = table.parse(args.perm) if args.perm is not None else None
     bits = table.parse(args.has_bits) if args.has_bits is not None else None
     rows = [
-        (path, clientid, perm, table.describe(perm), bool(owner), last)
-        for path, clientid, perm, owner, last in found
+        (path, clientid, perm, table.describe(perm), bool(owner), acl)
+        for path, clientid, perm, owner, acl in found
         if (exact is None or perm == exact) and (bits is None or covers(perm, bits))
     ]
     rows.sort(key=lambda r: (natural_key(r[1]), natural_key(r[0])))
-    output(columns, rows, args.format)
+    output(["path", "clientid", "perm", "rights", "owner", "acl"], rows, args.format)
     info(f"{len(rows)} Treffer")
     return 0
 
 
 def cmd_clients(args: argparse.Namespace) -> int:
     con = open_db(Path(args.db))
-    # own_acls: an wie vielen Pfaden die clientid selbst eingetragen ist (ohne Vererbung)
-    own = dict(con.execute(
-        "SELECT principal, COUNT(DISTINCT path) FROM entry WHERE kind = 'client' GROUP BY principal"))
     # perms: wie oft welche Maske vorkommt, z. B. "1:12 3:40 19:2"
     perms = {}
     for clientid, perm, count in con.execute(
-            "SELECT clientid, perm, COUNT(*) FROM effective GROUP BY clientid, perm ORDER BY perm"):
+            "SELECT clientid, perm, COUNT(*) FROM rights GROUP BY clientid, perm ORDER BY perm"):
         perms.setdefault(clientid, []).append(f"{perm}:{count}")
     rows = [
-        (clientid, paths, " ".join(perms[clientid]), owner, own.get(clientid, 0))
+        (clientid, paths, " ".join(perms[clientid]), owner)
         for clientid, paths, owner in con.execute(
-            "SELECT clientid, COUNT(*), SUM(owner) FROM effective GROUP BY clientid")
+            "SELECT clientid, COUNT(*), SUM(owner) FROM rights GROUP BY clientid")
     ]
     rows.sort(key=lambda r: natural_key(r[0]))
-    output(["clientid", "paths", "perms", "owner", "own_acls"], rows, args.format)
+    output(["clientid", "acls", "perms", "owner"], rows, args.format)
     return 0
 
 
@@ -229,18 +214,15 @@ def cmd_count(args: argparse.Namespace) -> int:
     con = open_db(Path(args.db))
     queries = [
         ("paths", "alle eingesammelten Pfade", "SELECT COUNT(*) FROM node"),
-        ("paths_with_acl", "Pfade mit eigener ACL", "SELECT COUNT(*) FROM node WHERE acl IS NOT NULL"),
-        ("paths_inherited", "Pfade, die eine ACL erben",
-         "SELECT COUNT(*) FROM node WHERE acl_from IS NOT NULL AND acl_from != path"),
-        ("paths_without_acl", "Pfade ohne geltende ACL", "SELECT COUNT(*) FROM node WHERE acl_from IS NULL"),
+        ("paths_with_acl", "Pfade mit ACL", "SELECT COUNT(*) FROM node WHERE acl IS NOT NULL"),
         ("paths_with_problems", "ACLs mit Formatfehlern",
          "SELECT COUNT(*) FROM node WHERE problems IS NOT NULL"),
-        ("entries", "eigene ACL-Einträge (Tabelle entry)", "SELECT COUNT(*) FROM entry"),
+        ("entries", "ACL-Einträge inkl. Besitzer (Tabelle entry)", "SELECT COUNT(*) FROM entry"),
         ("entries_client", "davon clientids", "SELECT COUNT(*) FROM entry WHERE kind = 'client'"),
+        ("entries_group", "davon Gruppen", "SELECT COUNT(*) FROM entry WHERE kind = 'group'"),
         ("entries_owner", "davon Besitzer", "SELECT COUNT(*) FROM entry WHERE owner = 1"),
-        ("effective", "effektive Rechte Pfad/clientid (Tabelle effective)",
-         "SELECT COUNT(*) FROM effective"),
-        ("clientids", "clientids mit Rechten", "SELECT COUNT(DISTINCT clientid) FROM effective"),
+        ("rights", "Rechte Pfad/clientid (Tabelle rights)", "SELECT COUNT(*) FROM rights"),
+        ("clientids", "clientids in ACLs", "SELECT COUNT(DISTINCT clientid) FROM rights"),
     ]
     rows = [(name, con.execute(sql).fetchone()[0], text) for name, text, sql in queries]
     output(["name", "count", "description"], rows, args.format)
@@ -256,43 +238,31 @@ def rights_suffix(perm: int) -> str:
 def cmd_show(args: argparse.Namespace) -> int:
     con = open_db(Path(args.db))
     path = args.path.rstrip("/")
-    row = con.execute("SELECT acl, parent, problems FROM node WHERE path = ?", (path,)).fetchone()
+    row = con.execute("SELECT acl, problems FROM node WHERE path = ?", (path,)).fetchone()
     if row is None:
         raise UsageError(f"{path} ist nicht eingesammelt.")
-    acl, parent, problems = row
-    # Vorfahren mit ACL, von oben nach unten: sie werden zusammengeführt
-    inherited = []
-    while parent is not None:
-        parent_acl, grandparent = con.execute(
-            "SELECT acl, parent FROM node WHERE path = ?", (parent,)).fetchone()
-        if parent_acl is not None:
-            inherited.insert(0, (parent, parent_acl))
-        parent = grandparent
+    acl, problems = row
     print(f"Pfad:    {path}")
     print(f"ACL:     {acl if acl is not None else '(keine)'}")
-    for ancestor, ancestor_acl in inherited:
-        print(f"Erbt:    {ancestor_acl}  (von {ancestor})")
-    if acl is None and not inherited:
-        print("Gilt:    keine ACL")
     if problems:
         print(f"Warnung: {problems}")
-    rights = con.execute("SELECT clientid, perm, owner, acl_from FROM effective WHERE path = ?",
-                         (path,)).fetchall()
+    if acl is None:
+        return 0
+    rights = con.execute("SELECT clientid, perm, owner FROM rights WHERE path = ?", (path,)).fetchall()
     rights.sort(key=lambda r: natural_key(r[0]))
     print("Rechte:  " + (", ".join(
         f"{clientid}={perm}{rights_suffix(perm)}" + (" (Besitzer)" if owner else "")
-        + (f" (aus {acl_from})" if acl_from != path else "")
-        for clientid, perm, owner, acl_from in rights
+        for clientid, perm, owner in rights
     ) or "keine clientid"))
     return 0
 
 
 def cmd_export(args: argparse.Namespace) -> int:
     con = open_db(Path(args.db))
-    rows = con.execute("SELECT path, clientid, perm, acl_from FROM effective").fetchall()
+    rows = con.execute("SELECT path, clientid, perm FROM rights").fetchall()
     # gleiche Sortierung wie test.sh (sort -V), damit ein diff gegen expected.csv passt
     rows.sort(key=lambda r: (natural_key(r[0]), natural_key(r[1])))
-    columns = ["path", "clientid", "perm", "acl_from"]
+    columns = ["path", "clientid", "perm"]
     if args.output:
         with open(args.output, "w", newline="") as file:
             output(columns, rows, "csv", file)
@@ -311,23 +281,13 @@ def cmd_add(args: argparse.Namespace) -> int:
         raise UsageError("QUELLE und NEU sind gleich.")
     hdfs = Hdfs(args.parallel, args.hadoop_version)
     nodes, origin = refresh(args, hdfs)
-    changes, _, _ = plan_add(nodes, source, new)
+    changes, _ = plan_add(nodes, source, new)
     nodes = recheck(args, hdfs, nodes, [c.path for c in changes])
-    changes, found, excess = plan_add(nodes, source, new)
+    changes, found = plan_add(nodes, source, new)
     if not found:
         print(f"{source} steht in keiner ACL.")
         return 0
-    rc = execute(args, hdfs, f"add-{new[1:]}", changes, nodes, origin)
-    if excess:
-        # Container-ACLs können nur Werte >= 1 setzen: wo QUELLE und NEU nichts
-        # hatten, lässt sich ein geerbter Eintrag von NEU nicht wegnehmen
-        print(f"Warnung: {new} bekommt an {len(excess)} Pfaden über die Vererbung Rechte, "
-              f"die {source} dort nicht hat (eigener Besitzer im Container, {source} "
-              "nicht gelistet). Einschränken geht nicht, eine Maske 0 gibt es nicht:",
-              file=sys.stderr)
-        for path in sorted(excess, key=natural_key):
-            print(f"  {path}", file=sys.stderr)
-    return rc
+    return execute(args, hdfs, f"add-{new[1:]}", changes, nodes, origin)
 
 
 def cmd_replace(args: argparse.Namespace) -> int:

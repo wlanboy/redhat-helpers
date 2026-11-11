@@ -166,27 +166,31 @@ class CommandTest(unittest.TestCase):
         rc, out, _ = self.run_main("search", "@client3", "--format", "csv")
         self.assertEqual(rc, 0)
         rows = list(csv.reader(io.StringIO(out), delimiter=";"))
-        self.assertEqual([r[0] for r in rows[1:]],
-                         ["/fs/account1", "/fs/account1/container1", "/fs/account1/container2"])
+        # nur ACLs, die @client3 nennen; container1 erbt nur und fehlt deshalb
+        self.assertEqual([r[0] for r in rows[1:]], ["/fs/account1", "/fs/account1/container2"])
+        self.assertEqual(rows[1], ["/fs/account1", "@client3", "19", "ADMIN", "1", NODES["/fs/account1"]])
 
-        _, out, _ = self.run_main("search", "@client*", "--own", "--format", "csv")
+        _, out, _ = self.run_main("search", "@client*", "--format", "csv")
         self.assertEqual(len(out.splitlines()), 3)
         _, out, _ = self.run_main("search", "@client3", "--perm", "1", "--format", "csv")
         self.assertEqual(len(out.splitlines()), 2)
 
         _, out, _ = self.run_main("clients", "--format", "csv")
-        self.assertIn("@client3;3;1:1 19:2;2;2", out)
+        self.assertIn("@client3;2;1:1 19:1;1", out)
 
         rc, out, _ = self.run_main("count", "--format", "csv")
         self.assertEqual(rc, 0)
         counts = {r[0]: int(r[1]) for r in list(csv.reader(io.StringIO(out), delimiter=";"))[1:]}
         self.assertEqual(counts["paths"], 4)
         self.assertEqual(counts["paths_with_acl"], 3)
-        self.assertEqual(counts["paths_inherited"], 1)
+        self.assertEqual(counts["entries_group"], 1)
         self.assertEqual(counts["clientids"], 5)
 
+        # Pfad ohne ACL: nichts Geerbtes
         _, out, _ = self.run_main("show", "/fs/account1/container1/")
-        self.assertIn("Erbt:    @client3|@test1=1,@test2=2  (von /fs/account1)", out)
+        self.assertEqual(out, "Pfad:    /fs/account1/container1\nACL:     (keine)\n")
+        _, out, _ = self.run_main("show", "/fs/account1")
+        self.assertIn("Rechte:  @client3=19 [ADMIN] (Besitzer), @test1=1 [READ], @test2=2 [2]", out)
         rc, _, err = self.run_main("show", "/fs/gibtsnicht")
         self.assertEqual(rc, 1)
         self.assertIn("nicht eingesammelt", err)

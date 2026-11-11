@@ -1,4 +1,4 @@
-"""Tests für hdfs.acl: Format, Gruppen, effektive Rechte, Vererbung, clientid-Prüfung."""
+"""Tests für hdfs.acl: Format, Gruppen, Rechte je ACL, clientid-Prüfung."""
 
 import unittest
 
@@ -10,9 +10,6 @@ from hdfs.acl import (
     group_id,
     is_ldap,
     principal_kind,
-    resolve,
-    resolve_acl_from,
-    rights,
     split_entries,
     split_token,
 )
@@ -115,54 +112,12 @@ class AclTest(unittest.TestCase):
                          {"@o": (19, True), "@c": (2**31 - 1, False)})
 
 
-class InheritTest(unittest.TestCase):
-    """Container-ACLs erweitern oder schränken die Account-ACL ein."""
-
-    def effective(self, nodes: dict) -> dict:
-        return {path: rights(state) for path, state in resolve(nodes).items()}
-
-    def test_extend_and_restrict(self):
-        eff = self.effective({"/fs/a": "@o|@b=3,@c=1", "/fs/a/c": "@o|@b=1,@d=3"})
-        self.assertEqual(eff["/fs/a/c"], {
-            "@o": (19, True, "/fs/a/c"),     # eigener Besitzer im Container
-            "@b": (1, False, "/fs/a/c"),    # eingeschränkt
-            "@c": (1, False, "/fs/a"),      # geerbt
-            "@d": (3, False, "/fs/a/c"),    # erweitert
-        })
-
-    def test_container_owner_replaces(self):
-        # @o hat im Container nur seine Einträge, das Besitzer-Recht nicht
-        eff = self.effective({"/fs/a": "@o|@o=1,@b=1", "/fs/a/c": "@x|"})
-        self.assertEqual(eff["/fs/a/c"], {"@o": (1, False, "/fs/a"), "@b": (1, False, "/fs/a"),
-                                          "@x": (19, True, "/fs/a/c")})
-        eff = self.effective({"/fs/a": "@o|", "/fs/a/c": f"{OPS}|"})
-        self.assertEqual(eff["/fs/a/c"], {})
-
-    def test_empty_owner_inherits(self):
-        eff = self.effective({"/fs/a": "@o|", "/fs/a/c": "|@o=16,@b=1"})
-        self.assertEqual(eff["/fs/a/c"], {"@o": (19, True, "/fs/a/c"), "@b": (1, False, "/fs/a/c")})
-        self.assertEqual(eff["/fs/a"], {"@o": (19, True, "/fs/a")})
-
-    def test_three_levels(self):
-        eff = self.effective({"/fs/a": "@o|@b=3", "/fs/a/c": None, "/fs/a/c/s": "|@b=1",
-                              "/fs/x": None, "/fs/x/c": "|@y=1"})
-        self.assertEqual(eff["/fs/a/c"], {"@o": (19, True, "/fs/a"), "@b": (3, False, "/fs/a")})
-        self.assertEqual(eff["/fs/a/c/s"], {"@o": (19, True, "/fs/a"), "@b": (1, False, "/fs/a/c/s")})
-        self.assertEqual(eff["/fs/x"], {})
-        self.assertEqual(eff["/fs/x/c"], {"@y": (1, False, "/fs/x/c")})
-
-    def test_inheriting_paths_share_state(self):
-        states = resolve({"/fs/a": "@o|", "/fs/a/c1": None, "/fs/a/c2": None})
-        self.assertIs(states["/fs/a/c1"], states["/fs/a"])
-        self.assertIs(states["/fs/a/c2"], states["/fs/a"])
-
-
 class AclProblemsTest(unittest.TestCase):
     def test_valid(self):
         self.assertEqual(acl_problems(f"@a|@b=1,{OPS}=3,user=2,cn=doc,ou=hell,dc=firma=3"), [])
         self.assertEqual(acl_problems("@a|"), [])
         self.assertEqual(acl_problems(f"@a|@b={2**31 - 1}"), [])
-        # leerer Besitzer erbt, das prüft store.save() im Baum
+        # leerer Besitzer: die Anwendung nimmt den des Elternordners
         self.assertEqual(acl_problems("|@b=1"), [])
 
     def test_missing_separator(self):
@@ -183,19 +138,6 @@ class HelpersTest(unittest.TestCase):
         self.assertTrue(covers(19, 16))
         self.assertFalse(covers(1, 3))
         self.assertFalse(covers(3, 16))
-
-    def test_resolve_acl_from(self):
-        nodes = {
-            "/fs/a/c1": None,  # Reihenfolge egal, sortiert wird nach Tiefe
-            "/fs/a": "@x|",
-            "/fs/a/c2": "@y|",
-            "/fs/b": None,
-            "/fs/b/c": None,
-        }
-        self.assertEqual(resolve_acl_from(nodes), {
-            "/fs/a": "/fs/a", "/fs/a/c1": "/fs/a", "/fs/a/c2": "/fs/a/c2",
-            "/fs/b": None, "/fs/b/c": None,
-        })
 
     def test_client_id(self):
         self.assertEqual(client_id("client1"), "@client1")

@@ -40,35 +40,35 @@ class StoreTest(unittest.TestCase):
             con = open_db(self.db)
         self.assertIn("aus test, /fs, user.acl", err.getvalue())
 
-        node = {row[0]: row[1:] for row in con.execute("SELECT path, parent, depth, acl_from FROM node")}
-        self.assertEqual(node["/fs/account1"], (None, 1, "/fs/account1"))
-        self.assertEqual(node["/fs/account1/container1"], ("/fs/account1", 2, "/fs/account1"))
-        self.assertEqual(node["/fs/account2"], (None, 1, None))
+        node = {row[0]: row[1:] for row in con.execute("SELECT path, parent, depth FROM node")}
+        self.assertEqual(node["/fs/account1"], (None, 1))
+        self.assertEqual(node["/fs/account1/container1"], ("/fs/account1", 2))
         problems = dict(con.execute("SELECT path, problems FROM node WHERE problems IS NOT NULL"))
-        # leerer Besitzer ohne geerbten ist eine Warnung, mit geerbtem nicht
-        self.assertEqual(problems, {"/fs/account2/container1": "kein Besitzer (auch nicht geerbt)",
-                                    "/fs/account3": "kein '|' zwischen Besitzer und Einträgen"})
+        self.assertEqual(problems, {"/fs/account3": "kein '|' zwischen Besitzer und Einträgen"})
 
         entries = set(con.execute("SELECT principal, kind, perm, owner FROM entry WHERE path = '/fs/account1'"))
         self.assertEqual(entries, {("@client1", "client", 19, 1), ("@client2", "client", 3, 0),
                                    ("svc", "user", 1, 0), (".cn=ops,ou=groups,dc=firma", "group", 3, 0)})
 
-        effective = set(con.execute("SELECT path, clientid, perm, owner, acl_from FROM effective"))
-        self.assertEqual(effective, {
-            ("/fs/account1", "@client1", 19, 1, "/fs/account1"),
-            ("/fs/account1", "@client2", 3, 0, "/fs/account1"),
-            ("/fs/account1/container1", "@client1", 19, 1, "/fs/account1"),
-            ("/fs/account1/container1", "@client2", 3, 0, "/fs/account1"),
-            # eigener Besitzer, @client2 eingeschränkt
-            ("/fs/account1/container2", "@client4", 19, 1, "/fs/account1/container2"),
-            ("/fs/account1/container2", "@client1", 16, 0, "/fs/account1/container2"),
-            ("/fs/account1/container2", "@client2", 1, 0, "/fs/account1/container2"),
-            # Besitzer geerbt, erweitert um @client5
-            ("/fs/account1/container3", "@client1", 19, 1, "/fs/account1"),
-            ("/fs/account1/container3", "@client2", 3, 0, "/fs/account1"),
-            ("/fs/account1/container3", "@client5", 1, 0, "/fs/account1/container3"),
-            ("/fs/account2/container1", "@client6", 1, 0, "/fs/account2/container1"),
+        # nur was an einem Pfad selbst steht: Pfade ohne ACL haben keine Rechte
+        rights = set(con.execute("SELECT path, clientid, perm, owner FROM rights"))
+        self.assertEqual(rights, {
+            ("/fs/account1", "@client1", 19, 1),
+            ("/fs/account1", "@client2", 3, 0),
+            ("/fs/account1/container2", "@client4", 19, 1),
+            ("/fs/account1/container2", "@client1", 16, 0),
+            ("/fs/account1/container2", "@client2", 1, 0),
+            ("/fs/account1/container3", "@client5", 1, 0),
+            ("/fs/account2/container1", "@client6", 1, 0),
         })
+
+    def test_open_old_format(self):
+        con = sqlite3.connect(self.db)
+        con.execute("CREATE TABLE meta (key TEXT, value TEXT)")
+        con.commit()
+        con.close()
+        with self.assertRaises(UsageError):
+            open_db(self.db)
 
     def test_save_replaces_db(self):
         save(self.db, "/fs", "user.acl", 2, "alt", NODES)

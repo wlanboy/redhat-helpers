@@ -33,31 +33,20 @@ Hilfsmittel rund um ACL-Metadaten (xattr `user.acl`) auf Ordnern im HDFS.
 Beispiel: `@client1|@client2=3,svc_backup=1,@client3=1,.cn=ops,ou=groups,dc=firma=3`
 ergibt `@client1=19`, `@client2=3`, `@client3=1`.
 
-### Vererbung: Account und Container
+### Nur die ACL-Einträge selbst
 
-Ein Pfad ohne ACL erbt alles vom Elternordner, über beliebig viele Ebenen.
-Hat ein Container eine eigene ACL, **erweitert oder schränkt** sie die des
-Accounts **ein**:
+Das Tool wertet nur aus, was an einem Pfad selbst im xattr steht: Besitzer
+und Einträge. Geerbte Rechte zeigt es nicht an und rechnet es nicht nach.
+Ein Pfad ohne ACL hat in der DB keine Rechte, `search` findet nur ACLs, die
+die clientid nennen.
 
-- Nennt die Container-ACL eine clientid, gilt dort deren Wert, auch wenn er
-  kleiner ist. Alle anderen clientids behalten den Wert aus dem Account.
-- Ein Besitzer im Container ersetzt den des Accounts. Der Account-Besitzer
-  behält dort nur seine Einträge, das Besitzer-Recht nicht.
-- Ein leerer Besitzer (`|@a=1`) übernimmt den Besitzer des Accounts. Gibt
-  es auch dort keinen, meldet `collect` „kein Besitzer (auch nicht geerbt)“.
-- Ganz entziehen kann ein Container ein geerbtes Recht nicht, eine Maske `0`
-  gibt es nicht.
+Zur Einordnung, so wertet die Anwendung die ACLs aus:
 
-| Account                     | Container                | gilt im Container                          |
-|-----------------------------|--------------------------|--------------------------------------------|
-| `@a\|@b=3,@c=1`             | keine ACL                | `@a=19` (Besitzer), `@b=3`, `@c=1`         |
-| `@a\|@b=3,@c=1`             | `@a\|@b=1,@d=3`          | `@a=19`, `@b=1` (eingeschränkt), `@c=1`, `@d=3` |
-| `@a\|@b=3`                  | `@x\|`                   | `@x=19` (Besitzer), `@b=3`; `@a` nichts    |
-| `@a\|@a=1`                  | `@x\|`                   | `@x=19`, `@a=1` (nur sein Eintrag)         |
-| `@a\|@b=3`                  | `\|@c=1`                 | `@a=19` (Besitzer geerbt), `@b=3`, `@c=1`  |
-
-In `effective` steht je clientid in `acl_from` der tiefste Pfad, dessen ACL
-zum Recht beiträgt (Eintrag oder Besitzer).
+- Ein Pfad ohne ACL erbt alles vom Elternordner.
+- Eine Container-ACL **erweitert oder schränkt** die des Accounts **ein**.
+  Nennt sie eine clientid, gilt dort deren Wert, sonst der aus dem Account.
+- Container können einen eigenen Besitzer haben, er ersetzt den des
+  Accounts. Ein leerer Besitzer (`|@a=1`) übernimmt den des Accounts.
 
 ### Bezug zu Spring Security ACL
 
@@ -77,7 +66,7 @@ Nachgelesen im Quelltext von Spring Security (`acl/…/domain`, Branch `main`):
   bitweise. Kombinierte Masken wie `3`, `19` oder `21` setzen eine eigene,
   bitweise Auswertung in der Anwendung voraus, wie sie dieses Tool annimmt.
   Das Zusammenführen von Account- und Container-ACL ist ebenfalls eine Regel
-  der Anwendung, Spring vererbt über `setParent`/`entriesInheriting` anders.
+  der Anwendung.
 
 Deshalb bekommt NEU bei `add` dort, wo ALT Besitzer ist, `19`.
 
@@ -116,7 +105,7 @@ Wirkung:
   Zahl stehen (`27` → `ADMIN+8`, `5` → `READ+4`), ein Name mit mehr Bits
   gewinnt.
 - `search --perm` und `--has-bits` nehmen auch Namen: `--has-bits ADMIN`.
-- `owner` steckt in den effektiven Rechten der DB. Wird die Tabelle nach
+- `owner` steckt in den Rechten der DB (Tabelle `rights`). Wird die Tabelle nach
   `collect` mit anderem `owner` gewechselt, warnen die lesenden Kommandos:
   dann `collect` erneut ausführen.
 - `export` bleibt numerisch (Vergleich mit `testdata/expected.csv`).
@@ -136,7 +125,7 @@ uv run hdfs-acl <kommando> ...
 |------------------|--------------------------------------------------------------------|
 | `main.py`        | Einstieg: Argumente (argparse), Fehlerbehandlung                   |
 | `commands.py`    | ein `cmd_*` je Kommando, gemeinsamer Ablauf `execute()` fürs Ändern |
-| `acl.py`         | ACL-Format parsen/prüfen, effektive Rechte, Vererbung              |
+| `acl.py`         | ACL-Format parsen/prüfen (inkl. Gruppen-DN), Rechte je ACL         |
 | `permissions.py` | Rechte-Tabelle: Namen der Bits, Besitzer-/Verwaltungsrecht (JSON) |
 | `changes.py`     | `Change` und `plan_*`: was `add`/`replace`/`remove`/`restore` ändern |
 | `fsimage.py`     | XML von `hdfs oiv` als Stream lesen, Pfade zusammensetzen          |
@@ -234,35 +223,38 @@ Ergebnis ist eine SQLite-Datei mit den Tabellen
 
 | Tabelle     | Inhalt                                                          |
 |-------------|-----------------------------------------------------------------|
-| `node`      | jeder Pfad mit Roh-ACL, `acl_from` (wessen ACL gilt), Warnungen |
-| `entry`     | nur **aktiv gesetzte** Einträge (client/user/group, ohne LDAP) inkl. Besitzer |
-| `effective` | effektives Recht je `@clientid` und Pfad, Account und Container zusammengeführt (berechnet) |
+| `node`      | jeder Pfad mit Roh-ACL und Warnungen                            |
+| `entry`     | Einträge der ACLs (client/user/group, ohne LDAP) inkl. Besitzer |
+| `rights`    | Recht je `@clientid` und ACL: Einträge verodert, Besitzer mit `19`; nichts Geerbtes |
 | `meta`      | Basisordner, Attribut, Zeitpunkt und Quelle (fsimage/live)      |
 
 Die DB wird bei jedem `collect` komplett neu geschrieben, Abfragen gehen auch
 direkt mit `sqlite3 hdfs-acl.db`. ACLs mit Formatfehlern (kein `|`,
-Eintrag ohne `=<zahl>`, Maske 0 oder größer als 2147483647, kein Besitzer,
-auch nicht geerbt) meldet `collect` als Warnung.
+Eintrag ohne `=<zahl>`, Gruppe ohne Recht, Maske 0 oder größer als
+2147483647) meldet `collect` als Warnung. Ein leerer Besitzer ist kein
+Fehler. Eine DB aus einer älteren Version (Tabelle `effective`) muss neu
+eingesammelt werden.
 
 ### Suchen
 
 ```bash
-hdfs-acl search @client3                 # alle Pfade mit Rechten, inkl. geerbter
-hdfs-acl search client3 --own           # nur aktiv gesetzte, mit Roh-ACL
-hdfs-acl search '@*' --own --format csv # alle aktiv gesetzten ACLs pro clientid
+hdfs-acl search @client3                 # alle ACLs, die @client3 nennen, mit Roh-ACL
+hdfs-acl search client3                 # dasselbe, @ wird ergänzt
+hdfs-acl search '@*' --format csv       # alle ACL-Einträge pro clientid
 hdfs-acl search '@client*' --perm 3     # Glob, nur genau Maske 3
 hdfs-acl search '@*' --has-bits 16      # alle, deren Maske Bit 16 enthält
 hdfs-acl search '@*' --has-bits ADMIN   # alle mit allen Bits von 19
 hdfs-acl search '@*' --perm read_write  # Namen aus der Rechte-Tabelle
 hdfs-acl search @client3 --format csv   # oder json
-hdfs-acl clients                         # alle clientids mit Anzahl Pfade je Maske ("3:40 19:2")
+hdfs-acl clients                         # alle clientids mit Anzahl ACLs je Maske ("3:40 19:2")
 hdfs-acl count                           # Anzahl Pfade, ACLs, Einträge, Rechte, clientids in der DB
-hdfs-acl show /fs/account3/container10   # eigene und geerbte ACLs, Rechte mit Herkunft
+hdfs-acl show /fs/account3/container10   # ACL eines Pfads und die Rechte daraus
 hdfs-acl export -o export.csv            # Format wie testdata/expected.csv
 ```
 
-Ausgabe sortiert nach clientid, dann Pfad. `--own` liest aus `entry` und
-zeigt statt `acl_from` die Roh-ACL des Pfads. Das `@` an der clientid kann
+Ausgabe sortiert nach clientid, dann Pfad, mit der Roh-ACL des Pfads in der
+letzten Spalte. Steht eine clientid mehrfach in einer ACL oder ist sie
+zusätzlich Besitzer, gibt es eine Zeile mit allen Bits. Das `@` an der clientid kann
 man weglassen. Suchen arbeiten auf dem Stand
 des letzten `collect`, Zeitpunkt und Quelle stehen auf stderr.
 
@@ -304,11 +296,9 @@ Geändert werden nur Pfade mit eigener ACL. Container ohne ACL ändern sich
 über ihren Account automatisch mit. Einträge für User, Gruppen und andere
 Client-IDs bleiben Wort für Wort erhalten.
 
-Weil Container-ACLs die des Accounts erweitern oder einschränken, planen
-`add` und `replace` über den ganzen Baum. Ein Eintrag für NEU im Account
-wirkt in jedem Container, der NEU nicht selbst nennt. Wo NEU dadurch zu
-viel oder zu wenig hätte, bekommt die Container-ACL einen eigenen Eintrag
-für NEU, z. B. wenn der Container ALT einschränkt (`@client3=1`).
+`add` und `replace` übertragen nur **explizite** Rechte: was ALT in einer
+ACL selbst stehen hat, als Besitzer oder Eintrag. Geerbte Rechte lösen nichts
+aus, ACLs ohne ALT bleiben unverändert.
 
 ```bash
 # Migration: @newapp bekommt überall dieselben Rechte wie @client3
@@ -325,15 +315,9 @@ hdfs-acl add @client3 @newapp --generate add-newapp.sh   # oder: Skript statt sc
 - Hat `@newapp` schon alle Bits von `@client3`, passiert nichts. Fehlen
   welche, werden sie im vorhandenen Eintrag ergänzt (`@newapp=4` und
   `@client3=1` ergibt `@newapp=5`). Entfernt wird nie ein Bit.
-- Container, die vom Account erben, brauchen keinen eigenen Eintrag. Ein
-  Container mit eigenem Besitzer, in dem `@client3` nur `=1` hat, bekommt
-  `@newapp=1`, damit die geerbten `19` dort nicht gelten.
-- **Grenze:** Hat `@client3` in einem Container mit eigenem Besitzer gar
-  nichts, erbt `@newapp` dort trotzdem die `19` aus dem Account. Einschränken
-  geht nicht, eine Maske `0` gibt es nicht. `add` listet diese Pfade als
-  Warnung auf stderr. Nach Phase 2 (`replace`) ist `@newapp` Besitzer des
-  Accounts und behält den Eintrag `=19`, der Überhang bleibt also. Wer das
-  nicht will, entfernt nach Phase 2 den Eintrag von `@newapp` im Account.
+- Schränkt eine Container-ACL `@client3` ein (`@client3=1`), bekommt
+  `@newapp` dort denselben Eintrag. Container, die `@client3` nicht nennen,
+  bleiben unverändert.
 - Mehrfach ausführen ist unschädlich.
 
 ```bash
@@ -344,12 +328,10 @@ hdfs-acl replace @client3 @newapp --apply
 
 - Besitzer `@client3` wird Besitzer `@newapp`, Einträge `@client3=x` werden
   an derselben Stelle zu `@newapp=x`.
-- Hatte `@newapp` schon einen Eintrag, bleibt einer mit den Bits beider.
-  Auch neben dem Besitzer `@newapp` bleibt er stehen: Einträge erben in
-  Container mit anderem Besitzer, das Besitzer-Recht nicht.
-- `@newapp` hat danach überall genau die Rechte, die `@client3` hatte (plus
-  seine eigenen), `@client3` nirgends mehr. Container, die `@newapp` selbst
-  nennen und von `@client3` geerbt haben, bekommen dafür die Bits beider.
+- Hatte `@newapp` schon einen Eintrag, bleibt einer mit den Bits beider,
+  auch neben dem Besitzer `@newapp`.
+- `@newapp` hat danach in jeder ACL genau die Rechte, die `@client3` dort
+  hatte (plus seine eigenen), `@client3` steht in keiner ACL mehr.
 
 ```bash
 # Client-ID überall entfernen
@@ -361,8 +343,7 @@ hdfs-acl remove @client3 --new-owner '.cn=admins,ou=groups,dc=firma' --apply
 Pfade, an denen die clientid **Besitzer** ist, werden ohne `--new-owner`
 übersprungen und aufgelistet (Exit-Code 2), weil eine ACL einen Besitzer
 braucht. Bleibt nach dem Entfernen nur der Besitzer übrig, wird die ACL zu
-`<besitzer>|`. In einem Container gelten dann die Einträge des Accounts
-weiter, der Besitzer des Containers bleibt. Mit `--new-owner` werden
+`<besitzer>|`. Mit `--new-owner` werden
 mehrere Einträge des neuen Besitzers zu einem zusammengefasst.
 
 `--new-owner` nimmt eine clientid oder eine Gruppe (`.` und voller DN ohne
@@ -392,9 +373,8 @@ neben dem neuen Besitzer stehen: Aus `@client3|@test1=1,@test2=2` wird
 erst `@client3|@test1=1,@test2=2,@newapp=19`, dann
 `@newapp|@test1=1,@test2=2,@newapp=19`. `replace` kann den Eintrag aus
 Phase 1 nicht von einem bewusst gesetzten unterscheiden und lässt ihn
-deshalb stehen. Er wirkt in Containern mit eigenem Besitzer, die `@newapp`
-nicht nennen (siehe Grenze bei `add`). Ein direktes `replace @client3
-@newapp` ohne Phase 1 setzt keinen solchen Eintrag.
+deshalb stehen. Ein direktes `replace @client3 @newapp` ohne Phase 1 setzt
+keinen solchen Eintrag.
 
 ```bash
 # zurückdrehen
@@ -435,7 +415,7 @@ Gemessen lokal mit einem einzelnen NameNode bzw. synthetischem oiv-XML. Die
 Laufzeit von `oiv` selbst kommt beim fsimage dazu. Der RAM-Bedarf wächst mit
 der Zahl der Ordner im ganzen Image (rund 0,3 GB je Million), nicht mit der
 Zahl der Dateien. Betroffen sind nur Pfade mit eigener ACL, die die clientid
-enthalten. Container, die erben, kosten beim Ändern nichts.
+enthalten. Pfade ohne ACL kosten beim Ändern nichts.
 
 ### Gegen die Testdaten prüfen
 
@@ -531,10 +511,9 @@ Beide mit `;` getrennt, weil die ACL-Werte selbst `,` und `|` enthalten.
 
 - `testdata/acls.csv` – `path;acl`: der gesetzte Rohwert je Pfad, leer =
   kein Attribut. Grundlage für `--verify-only`.
-- `testdata/expected.csv` – `path;clientid;perm;acl_from`: effektives Recht
-  je `@clientid` und Pfad, inklusive Vererbung. `acl_from` ist der Pfad,
-  dessen ACL gilt (bei geerbten Containern der Account). Pfade, an denen
-  keine `@clientid` Rechte hat, tauchen nicht auf.
+- `testdata/expected.csv` – `path;clientid;perm`: Recht je `@clientid`
+  aus der ACL des Pfads, nichts Geerbtes. Pfade ohne ACL oder ohne
+  `@clientid` tauchen nicht auf.
 
 Die Dateien hängen nur von `BASE_DIR` ab und sind bei gleichen Variablen
 immer identisch.
@@ -543,8 +522,6 @@ immer identisch.
 
 `n` = Account-Nummer, `cl(k)` = `@client<k>`, zyklisch über 1..10.
 `OPS`, `ADMINS`, `READERS` = Gruppen `.cn=<name>,ou=groups,dc=firma`.
-Container mit ACL werden mit der Account-ACL zusammengeführt (siehe
-[Vererbung](#vererbung-account-und-container)).
 
 | Pfad                 | ACL                                               | Testet                               |
 |----------------------|---------------------------------------------------|--------------------------------------|
@@ -552,19 +529,19 @@ Container mit ACL werden mit der Account-ACL zusammengeführt (siehe
 | `account3`           | Besitzer `hans`                                   | Besitzer ist User                    |
 | `account7`           | Besitzer `ADMINS`                                 | Besitzer ist Gruppe                  |
 | `account10`          | keine                                             | Account ohne ACL                     |
-| `container<c>`, c%5=0 | keine                                            | Vererbung vom Account                |
-| c%5=1                | `cl(n)\|cl(n+3)=3,dev_user=3,cl(n+4)=1`           | erweitert die Account-ACL            |
-| c%5=2                | `cl(n+5)\|READERS=1,cl(n+5)=1,cl(n)=1,cl(n+1)=1`  | Besitzer zusätzlich `=1` → bleibt 19; `cl(n+1)` 3 → 1 eingeschränkt |
-| c%5=3                | `maria\|cl(n+6)=3,cl(n+7)=1,OPS=1`                | eigener Besitzer (User), `cl(n)` verliert Besitz |
-| c%5=4                | `ADMINS\|peter=3,OPS=1`                           | keine eigene Client-ID, nur geerbte Einträge |
+| `container<c>`, c%5=0 | keine                                            | Container ohne ACL                   |
+| c%5=1                | `cl(n)\|cl(n+3)=3,dev_user=3,cl(n+4)=1`           | eigener Besitzer = Account-Besitzer  |
+| c%5=2                | `cl(n+5)\|READERS=1,cl(n+5)=1,cl(n)=1,cl(n+1)=1`  | Besitzer zusätzlich `=1` → bleibt 19; `cl(n+1)` schränkt Account ein |
+| c%5=3                | `maria\|cl(n+6)=3,cl(n+7)=1,OPS=1`                | Clients nur über Einträge            |
+| c%5=4                | `ADMINS\|peter=3,OPS=1`                           | keine Client-ID → keine Rechte       |
 | `container48`        | `cl(n+9)\|cl(n+1)=5,OPS=16,cl(n+1)=16,cl(n+9)=8,cn=doc,ou=hell,dc=firma=3,cn=testgroup` | Masken: ODER (21), Besitzer 19\|8=27; LDAP ohne `.` ignoriert |
 | `container49`        | `cl(n+8)\|`                                       | nur Besitzer, keine Einträge         |
-| `container50`        | `\|cl(n+3)=1,cl(n+2)=3`                           | Besitzer geerbt, `cl(n+2)` 1 → 3 erweitert; unter `account10` ohne Besitzer (Warnung) |
+| `container50`        | `\|cl(n+3)=1,cl(n+2)=3`                           | leerer Besitzer: nur Einträge        |
 | `container51`        | `cl(n+1)\|cl(n)=1,OPS=1`                          | Migration `cl(n)` → `cl(n+1)`: NEU schon Besitzer |
 | `container52`        | `cl(n)\|cl(n+1)=1`                                | Migration: ALT Besitzer, NEU schon Eintrag |
-| `container1/sub`     | keine                                             | erbt vom Container (3. Ebene)        |
-| `container5/sub`     | keine                                             | erbt über zwei Ebenen vom Account    |
-| `container10/sub`    | `cl(n+2)\|cl(n+3)=1,OPS=3`                        | eigene ACL unter erbendem Container, mit Account zusammengeführt |
+| `container1/sub`     | keine                                             | 3. Ebene ohne ACL                    |
+| `container5/sub`     | keine                                             | 3. Ebene ohne ACL                    |
+| `container10/sub`    | `cl(n+2)\|cl(n+3)=1,OPS=3`                        | ACL in der 3. Ebene                  |
 
 Unter `/fs/invalid` (selbst ohne ACL) liegen fehlerhafte ACLs. `collect`
 meldet sie als Warnung. Ungültige Teile geben keine Rechte, der Rest der
@@ -573,8 +550,8 @@ ACL gilt. Die erwarteten Rechte stehen in `test.sh` von Hand (`acl_invalid`).
 | Pfad                 | ACL                                               | Rechte                               |
 |----------------------|---------------------------------------------------|--------------------------------------|
 | `nopipe`             | `@inv1=3`                                         | keine: Besitzer `@inv1=3` ist keine clientid |
-| `noowner`            | `\|@inv2=3,OPS=1`                                 | `@inv2=3` (kein Besitzer, auch nicht geerbt) |
-| `noowner/sub`        | keine                                             | erbt `@inv2=3`                       |
+| `noowner`            | `\|@inv2=3,OPS=1`                                 | `@inv2=3` (leerer Besitzer)          |
+| `noowner/sub`        | keine                                             | keine (keine ACL)                    |
 | `badentry`           | `@inv3\|@inv4,@inv5=abc,=2,@inv6=1`               | `@inv3=19`, `@inv6=1`                |
 | `range`              | `@inv3\|@inv4=0,@inv5=2147483648,@inv6=2147483647` | `@inv3=19`, `@inv6=2147483647`      |
 | `spaces`             | `@inv3\| @inv4=1 , @inv5 = 1`                     | `@inv3=19`, `@inv4=1` (Leerzeichen um `=` ungültig) |
@@ -610,28 +587,25 @@ Ablauf:
    Einträge aus Phase 1 also bemerken.
 3. **Phase 1**, `add ALT NEU` (erst Dry-Run, dann `--apply`), danach prüfen
    (`migrate_check.py --stage added`):
-   - ALT hat genau die Rechte wie vorher. NEU hat an jedem Pfad die von
-     ALT, mit eigenen Rechten verodert, wo ALT Besitzer ist `19`. Pfade, an
-     denen NEU nur über den Account-Eintrag erbt (ALT und NEU hatten dort
-     nichts, siehe Grenze bei `add`), werden gezählt, nicht als Fehler.
+   - ALT hat genau die Rechte wie vorher. NEU hat in jeder ACL, die ALT
+     nennt, die Bits von ALT, mit eigenen verodert, wo ALT Besitzer ist `19`.
    - Der Besitzer bleibt: War ALT Besitzer, ist es weiter ALT.
    - Außer den Einträgen von NEU ist jede ACL Wort für Wort gleich, NEU
      steht höchstens einmal da.
 4. **Phase 2**, `replace ALT NEU`, danach prüfen (`--stage replaced`):
-   - Die effektiven Rechte (Masken) entsprechen genau `expected.csv`, nur
+   - Die Rechte je ACL entsprechen genau `expected.csv`, nur
      heißt ALT jetzt NEU. Hatte NEU an einem Pfad schon Rechte, gelten die
      Bits beider.
    - ALT steht in keiner ACL mehr, weder als Besitzer noch als Eintrag.
    - War ALT Besitzer, ist jetzt NEU Besitzer, sonst bleibt der Besitzer.
      NEU steht höchstens einmal als Eintrag da.
-   - Außer den Einträgen von NEU sind alle anderen Pfade Wort für Wort
-     unverändert.
+   - ACLs ohne ALT sind Wort für Wort unverändert.
 5. Beide Backups rückwärts mit `restore` zurückspielen. Danach müssen Rechte
    und ACLs genau den Testdaten entsprechen (`--stage restored`).
 
 Bei `@client3` ist ALT unter anderem „nur Besitzer“ (`@client3|`),
 „Besitzer zusätzlich mit `=1` gelistet“ und „Besitzer mit `=8`“ (NEU
-bekommt dort in Phase 1 `=27`). Die effektiven Rechte allein reichen für
+bekommt dort in Phase 1 `=27`). Die Rechte allein reichen für
 die Prüfung nicht: `hans|...,@newapp=19` statt `@newapp|...` gäbe
 `@newapp` dieselben Rechte, deshalb wird der Besitzer eigens geprüft.
 Mit `./migrate.sh @client3 @client4` kommen über `container51/52` beide
