@@ -11,13 +11,12 @@ Lesende Kommandos (search, clients, count, show, export) arbeiten nur auf der DB
 from __future__ import annotations
 
 import argparse
-import re
 import sqlite3
 import sys
 from datetime import datetime
 from pathlib import Path
 
-from hdfs.acl import client_id, covers
+from hdfs.acl import client_id, covers, group_id
 from hdfs.changes import plan_add, plan_remove, plan_replace, plan_restore
 from hdfs.common import HdfsError, UsageError, info, natural_key
 from hdfs.fsimage import find_fsimage
@@ -35,17 +34,18 @@ def base_dir(value: str) -> str:
 
 
 def owner_id(value: str) -> str:
-    """Neuer Besitzer von der Kommandozeile: #gruppe oder clientid.
+    """Neuer Besitzer von der Kommandozeile: Gruppe ('.' + voller DN) oder clientid.
 
     Ohne Präfix wird wie überall ein '@' ergänzt. "newapp" als User zum
     Besitzer zu machen wäre ein naheliegender Tippfehler, der die clientid
     aussperrt; User als neuer Besitzer gehen deshalb nicht.
     """
     value = value.strip()
+    if value.startswith("."):
+        return group_id(value)
     if value.startswith("#"):
-        if not re.fullmatch(r"#[^\s|,=#@]+", value):
-            raise UsageError(f"Ungültige Gruppe '{value}'.")
-        return value
+        raise UsageError(f"'{value}': Gruppen beginnen mit '.' und vollem DN, "
+                         "z. B. .cn=admins,ou=groups,dc=firma.")
     return client_id(value)
 
 
@@ -248,7 +248,7 @@ def cmd_count(args: argparse.Namespace) -> int:
 
 
 def rights_suffix(perm: int) -> str:
-    """' [READ+WRITE]' für show; leer, wenn die Rechte-Tabelle keine Namen hat."""
+    """' [READ_WRITE]' für show; leer, wenn die Rechte-Tabelle keine Namen hat."""
     names = active().describe(perm)
     return f" [{names}]" if names else ""
 
@@ -256,24 +256,33 @@ def rights_suffix(perm: int) -> str:
 def cmd_show(args: argparse.Namespace) -> int:
     con = open_db(Path(args.db))
     path = args.path.rstrip("/")
-    row = con.execute("SELECT acl, acl_from, problems FROM node WHERE path = ?", (path,)).fetchone()
+    row = con.execute("SELECT acl, parent, problems FROM node WHERE path = ?", (path,)).fetchone()
     if row is None:
         raise UsageError(f"{path} ist nicht eingesammelt.")
-    acl, acl_from, problems = row
+    acl, parent, problems = row
+    # Vorfahren mit ACL, von oben nach unten: sie werden zusammengeführt
+    inherited = []
+    while parent is not None:
+        parent_acl, grandparent = con.execute(
+            "SELECT acl, parent FROM node WHERE path = ?", (parent,)).fetchone()
+        if parent_acl is not None:
+            inherited.insert(0, (parent, parent_acl))
+        parent = grandparent
     print(f"Pfad:    {path}")
     print(f"ACL:     {acl if acl is not None else '(keine)'}")
-    if acl_from is None:
+    for ancestor, ancestor_acl in inherited:
+        print(f"Erbt:    {ancestor_acl}  (von {ancestor})")
+    if acl is None and not inherited:
         print("Gilt:    keine ACL")
-    elif acl_from != path:
-        inherited = con.execute("SELECT acl FROM node WHERE path = ?", (acl_from,)).fetchone()[0]
-        print(f"Gilt:    {inherited}  (geerbt von {acl_from})")
     if problems:
         print(f"Warnung: {problems}")
-    rights = con.execute("SELECT clientid, perm, owner FROM effective WHERE path = ?", (path,)).fetchall()
+    rights = con.execute("SELECT clientid, perm, owner, acl_from FROM effective WHERE path = ?",
+                         (path,)).fetchall()
     rights.sort(key=lambda r: natural_key(r[0]))
     print("Rechte:  " + (", ".join(
         f"{clientid}={perm}{rights_suffix(perm)}" + (" (Besitzer)" if owner else "")
-        for clientid, perm, owner in rights
+        + (f" (aus {acl_from})" if acl_from != path else "")
+        for clientid, perm, owner, acl_from in rights
     ) or "keine clientid"))
     return 0
 
@@ -302,13 +311,23 @@ def cmd_add(args: argparse.Namespace) -> int:
         raise UsageError("QUELLE und NEU sind gleich.")
     hdfs = Hdfs(args.parallel, args.hadoop_version)
     nodes, origin = refresh(args, hdfs)
-    changes, _ = plan_add(nodes, source, new)
+    changes, _, _ = plan_add(nodes, source, new)
     nodes = recheck(args, hdfs, nodes, [c.path for c in changes])
-    changes, found = plan_add(nodes, source, new)
+    changes, found, excess = plan_add(nodes, source, new)
     if not found:
         print(f"{source} steht in keiner ACL.")
         return 0
-    return execute(args, hdfs, f"add-{new[1:]}", changes, nodes, origin)
+    rc = execute(args, hdfs, f"add-{new[1:]}", changes, nodes, origin)
+    if excess:
+        # Container-ACLs können nur Werte >= 1 setzen: wo QUELLE und NEU nichts
+        # hatten, lässt sich ein geerbter Eintrag von NEU nicht wegnehmen
+        print(f"Warnung: {new} bekommt an {len(excess)} Pfaden über die Vererbung Rechte, "
+              f"die {source} dort nicht hat (eigener Besitzer im Container, {source} "
+              "nicht gelistet). Einschränken geht nicht, eine Maske 0 gibt es nicht:",
+              file=sys.stderr)
+        for path in sorted(excess, key=natural_key):
+            print(f"  {path}", file=sys.stderr)
+    return rc
 
 
 def cmd_replace(args: argparse.Namespace) -> int:

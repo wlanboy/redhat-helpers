@@ -20,7 +20,9 @@ from hdfs.acl import (
     acl_problems,
     is_ldap,
     principal_kind,
+    resolve,
     resolve_acl_from,
+    rights,
     split_token,
 )
 from hdfs.changes import Change
@@ -33,7 +35,7 @@ CREATE TABLE meta (
     value TEXT NOT NULL
 );
 -- alle eingesammelten Pfade; acl NULL = kein Attribut,
--- acl_from = Pfad, dessen ACL gilt (NULL = keine)
+-- acl_from = nächster Pfad mit eigener ACL, selbst oder Vorfahr (NULL = keiner)
 CREATE TABLE node (
     path     TEXT PRIMARY KEY,
     parent   TEXT,
@@ -50,7 +52,8 @@ CREATE TABLE entry (
     perm      INTEGER NOT NULL,
     owner     INTEGER NOT NULL
 );
--- effektive Rechte je clientid inkl. Vererbung
+-- effektive Rechte je clientid inkl. Vererbung (Container-ACLs erweitern oder
+-- schränken die geerbte ein); acl_from = tiefster Pfad, dessen ACL beiträgt
 CREATE TABLE effective (
     path     TEXT NOT NULL,
     clientid TEXT NOT NULL,
@@ -76,11 +79,16 @@ def save(db: Path, base: str, attr: str, depth: int, origin: str, nodes: dict) -
     con.executescript(SCHEMA)
 
     acl_from = resolve_acl_from(nodes)
-    # Viele Container erben dieselbe Account-ACL: deren Rechte nur einmal berechnen
+    states = resolve(nodes)
+    # Viele Container erben denselben Stand: deren Rechte nur einmal berechnen.
+    # Pfade mit demselben acl_from haben denselben Stand.
     rights_cache = {}
     for path, raw in nodes.items():
         parent = posixpath.dirname(path)
+        state = states[path]
         problems = acl_problems(raw) if raw is not None else []
+        if raw is not None and (state is None or not state.owner):
+            problems.append("kein Besitzer (auch nicht geerbt)")
         con.execute(
             "INSERT INTO node VALUES (?, ?, ?, ?, ?, ?)",
             (path, parent if parent in nodes else None, path[len(base):].count("/"),
@@ -97,14 +105,14 @@ def save(db: Path, base: str, attr: str, depth: int, origin: str, nodes: dict) -
                 if perm is not None and not is_ldap(token):
                     con.execute("INSERT INTO entry VALUES (?, ?, ?, ?, 0)",
                                 (path, principal, principal_kind(principal), perm))
-        # effective: was an diesem Pfad gilt, also die Rechte der ACL von acl_from
+        # effective: was an diesem Pfad gilt, alle ACLs von oben zusammengeführt
         source = acl_from[path]
         if source is not None:
             if source not in rights_cache:
-                rights_cache[source] = Acl.parse(nodes[source]).client_rights()
-            for clientid, (perm, owner) in rights_cache[source].items():
+                rights_cache[source] = rights(state)
+            for clientid, (perm, owner, from_path) in rights_cache[source].items():
                 con.execute("INSERT INTO effective VALUES (?, ?, ?, ?, ?)",
-                            (path, clientid, perm, int(owner), source))
+                            (path, clientid, perm, int(owner), from_path))
 
     meta = {
         "base_dir": base,

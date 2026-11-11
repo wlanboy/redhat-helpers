@@ -66,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
     db_opts.add_argument("--permissions", metavar="DATEI",
                          help="Rechte-Tabelle als JSON: Namen der Bits, Recht des Besitzers, "
                               "Verwaltungsrecht (Default: $HDFS_ACL_PERMISSIONS, sonst "
-                              "permissions.json neben der DB, sonst Spring-Standard)")
+                              "permissions.json neben der DB, sonst READ=1, READ_WRITE=3, ADMIN=19)")
 
     hdfs_opts = argparse.ArgumentParser(add_help=False)
     hdfs_opts.add_argument("--base-dir", default=os.environ.get("BASE_DIR", "/fs"),
@@ -111,9 +111,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("clientid", help="z. B. @client3 oder '@client*' (Glob)")
     p.add_argument("--own", action="store_true", help="nur eigene Einträge, ohne Vererbung")
     p.add_argument("--perm", metavar="RECHT",
-                   help="nur genau diese Maske, als Zahl oder Namen: 3, READ+WRITE")
+                   help="nur genau diese Maske, als Zahl oder Namen: 3, READ_WRITE")
     p.add_argument("--has-bits", metavar="RECHT",
-                   help="nur Rechte, die alle Bits enthalten: 16, ADMINISTRATION")
+                   help="nur Rechte, die alle Bits enthalten: 16, ADMIN")
     p.set_defaults(func=cmd_search)
 
     p = sub.add_parser("clients", parents=[db_opts, fmt_opts], help="alle clientids auflisten")
@@ -145,8 +145,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("remove", parents=[db_opts, hdfs_opts, write_opts], help="clientid entfernen")
     p.add_argument("clientid")
     p.add_argument("--new-owner", help="neuer Besitzer, wo CLIENTID Besitzer ist (sonst übersprungen): "
-                                       "clientid (@ wird ergänzt) oder #gruppe; "
-                                       "dessen eigene Einträge entfallen dann")
+                                       "clientid (@ wird ergänzt) oder Gruppe als "
+                                       "'.' und voller DN, z. B. .cn=admins,ou=groups,dc=firma")
     p.set_defaults(func=cmd_remove)
 
     p = sub.add_parser("restore", parents=[db_opts, hdfs_opts, write_opts],

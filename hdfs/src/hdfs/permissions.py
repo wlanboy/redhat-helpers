@@ -4,9 +4,9 @@ Die Tabelle entspricht der PermissionFactory der Anwendung und ist
 konfigurierbar (JSON-Datei, siehe hdfs.md und permissions.json):
 
     {
-      "permissions": {"READ": 1, "WRITE": 2, "CREATE": 4, "DELETE": 8, "ADMINISTRATION": 16},
-      "owner": "READ+WRITE",
-      "admin": "ADMINISTRATION"
+      "permissions": {"READ": 1, "READ_WRITE": 3, "ADMIN": 19},
+      "owner": "ADMIN",
+      "admin": "ADMIN"
     }
 
 - permissions: Name -> Maske. Einzelne Bits oder Kombinationen ("VOLL": 3).
@@ -14,9 +14,11 @@ konfigurierbar (JSON-Datei, siehe hdfs.md und permissions.json):
 - admin: Bit(s), mit denen andere die ACL verwalten dürfen wie der Besitzer;
   add gibt sie NEU zusätzlich, wo ALT Besitzer ist.
 
-Ohne Datei gelten die Werte von Spring Security (BasePermission) mit
-owner = 3 und admin = 16. Aktiv ist immer genau eine Tabelle (active()),
-main() setzt sie beim Start mit activate().
+Ohne Datei gelten die drei genutzten Werte: lesen 1, lesen + schreiben 3,
+verwalten 19 (= 3 + Spring-ADMINISTRATION 16). Der Besitzer hat immer 19
+(owner), add gibt NEU dort, wo ALT Besitzer ist, ebenfalls 19 (admin).
+Aktiv ist immer genau eine Tabelle (active()), main() setzt sie beim Start
+mit activate().
 """
 
 from __future__ import annotations
@@ -44,8 +46,8 @@ DEFAULT_FILE = "permissions.json"
 class Permissions:
     # Name -> Maske, in der Reihenfolge der Konfiguration
     names: dict = field(default_factory=dict)
-    owner: int = 3
-    admin: int = 16
+    owner: int = 19
+    admin: int = 19
     # Herkunft für Meldungen: Dateipfad oder "eingebaut"
     origin: str = "eingebaut"
 
@@ -68,11 +70,11 @@ class Permissions:
         return mask
 
     def describe(self, mask: int) -> str:
-        """Maske -> Namen, z. B. 19 -> 'READ+WRITE+ADMINISTRATION'.
+        """Maske -> Namen, z. B. 19 -> 'ADMIN', 11 -> 'READ_WRITE+8'.
 
         Passt ein Name genau, gilt er. Sonst werden Namen mit mehr Bits zuerst
         genommen (ein "VOLL": 3 schlägt READ+WRITE), übrige Bits ohne Namen
-        bleiben als Zahl stehen: 35 -> 'READ+WRITE+32'. Ohne Tabelle ''.
+        bleiben als Zahl stehen: 35 -> 'READ_WRITE+32'. Ohne Tabelle ''.
         """
         if not self.names:
             return ""
@@ -91,8 +93,8 @@ class Permissions:
 
 
 DEFAULT = Permissions(
-    names={"READ": 1, "WRITE": 2, "CREATE": 4, "DELETE": 8, "ADMINISTRATION": 16},
-    owner=3, admin=16,
+    names={"READ": 1, "READ_WRITE": 3, "ADMIN": 19},
+    owner=19, admin=19,
 )
 
 _active = DEFAULT
@@ -156,7 +158,7 @@ def load(path: Path) -> Permissions:
 
 def find(option: str | None, db: Path | None) -> Permissions:
     """Tabelle nach Vorrang: --permissions, $HDFS_ACL_PERMISSIONS,
-    permissions.json neben der DB, sonst eingebaut (Spring-Standard)."""
+    permissions.json neben der DB, sonst eingebaut (1, 3, 19)."""
     explicit = option or os.environ.get("HDFS_ACL_PERMISSIONS")
     if explicit:
         return load(Path(explicit))

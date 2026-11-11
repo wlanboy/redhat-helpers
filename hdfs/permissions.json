@@ -1,11 +1,9 @@
 {
   "permissions": {
     "READ": 1,
-    "WRITE": 2,
-    "CREATE": 4,
-    "DELETE": 8,
-    "ADMINISTRATION": 16
+    "READ_WRITE": 3,
+    "ADMIN": 19
   },
-  "owner": "READ+WRITE",
-  "admin": "ADMINISTRATION"
+  "owner": "ADMIN",
+  "admin": "ADMIN"
 }
