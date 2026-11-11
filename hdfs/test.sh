@@ -21,30 +21,37 @@
 #     löscht den Container am Ende wieder
 #
 # ACL-Format: <besitzer>|<eintrag>=<recht>,<eintrag>=<recht>,...
-#   besitzer/eintrag: @clientid, user (ohne Präfix) oder #gruppe;
-#   LDAP-Teile (cn=..., ou=..., dc=..., sn=...) werden ignoriert
-#   recht: Bitmaske (Spring Security ACL PermissionFactory), z. B.
-#          3 = lesen+schreiben+löschen, 1 = nur lesen
-#   Der Besitzer hat immer mindestens 3, mehrere Einträge einer clientid
+#   besitzer/eintrag: @clientid, user (ohne Präfix) oder Gruppe ('.' und
+#   voller DN, z. B. .cn=ops,ou=groups,dc=firma=3);
+#   LDAP-Teile ohne '.' (cn=..., ou=..., dc=..., sn=...) werden ignoriert
+#   recht: Bitmaske, genutzt werden 1 = lesen, 3 = lesen+schreiben,
+#          19 = verwalten
+#   Der Besitzer hat immer mindestens 19, mehrere Einträge einer clientid
 #   werden verodert. Ausgewertet werden nur @clientids.
-#   Container ohne ACL erben vom Account, ein Container mit ACL ersetzt die
-#   des Accounts komplett.
+#   Pfade ohne ACL erben. Eine ACL darunter erweitert oder schränkt die
+#   geerbte ein: Nennt sie eine clientid, gilt dort deren Wert, sonst der
+#   geerbte. Ein eigener Besitzer ersetzt den geerbten, ein leerer ("|...")
+#   übernimmt ihn.
 #
-# Schema (n = Account-Nummer, cl(k) = @client<k>, k zyklisch über 1..10):
-#   account n:   cl(n)|cl(n+1)=3,svc_backup=1,cl(n+2)=1,#ops=3
-#                account3 Besitzer "hans", account7 Besitzer "#admins",
+# Schema (n = Account-Nummer, cl(k) = @client<k>, k zyklisch über 1..10,
+# OPS/ADMINS/READERS = Gruppen .cn=<name>,ou=groups,dc=firma):
+#   account n:   cl(n)|cl(n+1)=3,svc_backup=1,cl(n+2)=1,OPS=3
+#                account3 Besitzer "hans", account7 Besitzer ADMINS,
 #                account10 ohne ACL
 #   container c: c%5==0  ohne ACL -> erbt vom Account
-#                c%5==1  cl(n)|cl(n+3)=3,dev_user=3,cl(n+4)=1
-#                c%5==2  cl(n+5)|#readers=1,cl(n+5)=1,cl(n)=1
-#                        (Besitzer zusätzlich mit =1 gelistet, bleibt 3)
-#                c%5==3  maria|cl(n+6)=3,cl(n+7)=1,#ops=1
-#                c%5==4  #admins|peter=3,#ops=1  (keine @clientid -> niemand)
-#                c==48   cl(n+9)|cl(n+1)=5,#ops=16,cl(n+1)=16,cl(n+9)=8,
+#                c%5==1  cl(n)|cl(n+3)=3,dev_user=3,cl(n+4)=1  (erweitert)
+#                c%5==2  cl(n+5)|READERS=1,cl(n+5)=1,cl(n)=1,cl(n+1)=1
+#                        (Besitzer zusätzlich mit =1 gelistet, bleibt 19;
+#                        cl(n+1) von 3 auf 1 eingeschränkt)
+#                c%5==3  maria|cl(n+6)=3,cl(n+7)=1,OPS=1
+#                c%5==4  ADMINS|peter=3,OPS=1  (nur geerbte Einträge)
+#                c==48   cl(n+9)|cl(n+1)=5,OPS=16,cl(n+1)=16,cl(n+9)=8,
 #                                cn=doc,ou=hell,dc=firma=3,cn=testgroup
-#                        (Masken > 3: cl(n+1) 5|16=21, Besitzer 3|8=11;
-#                        LDAP-Teile ohne Warnung ignoriert)
+#                        (Masken: cl(n+1) 5|16=21, Besitzer 19|8=27;
+#                        LDAP-Teile ohne '.' ohne Warnung ignoriert)
 #                c==49   cl(n+8)|  (nur Besitzer, keine Einträge)
+#                c==50   |cl(n+3)=1,cl(n+2)=3  (Besitzer geerbt, cl(n+2)
+#                        auf 3 erweitert; unter account10 ohne Besitzer)
 #                c==51   cl(n+1)|cl(n)=1,#ops=1  (Migration cl(n) -> cl(n+1):
 #                        NEU ist schon Besitzer, ALT nur Eintrag)
 #                c==52   cl(n)|cl(n+1)=1  (ALT Besitzer, NEU schon Eintrag)
@@ -52,11 +59,12 @@
 #                c==1    ohne ACL -> erbt vom Container
 #                c==5    ohne ACL -> erbt über zwei Ebenen vom Account
 #                        (unter account10 niemand)
-#                c==10   cl(n+2)|cl(n+3)=1,#ops=3  (eigene ACL unter einem
+#                c==10   cl(n+2)|cl(n+3)=1,OPS=3  (eigene ACL unter einem
 #                        erbenden Container)
 #   invalid/<name> (fehlerhafte ACLs, Rechte von Hand festgelegt, siehe
 #   acl_invalid): kein '|', kein Besitzer, ungültige Einträge, Recht 0 oder
-#   > 2^31-1, Leerzeichen, weitere LDAP-Teile; invalid/noowner/sub erbt
+#   > 2^31-1, Leerzeichen, weitere LDAP-Teile, Gruppe ohne Recht;
+#   invalid/noowner/sub erbt
 #   Fehlerhafte Teile geben keine Rechte, der Rest der ACL gilt.
 #
 # Optionen:
@@ -91,10 +99,15 @@ readonly ACCOUNTS=10
 readonly CONTAINERS=52
 # Container, die einen Unterordner sub haben (siehe acl_sub)
 readonly SUB_CONTAINERS=(1 5 10)
-readonly INVALID_NAMES=(nopipe noowner badentry range spaces ldap)
+readonly INVALID_NAMES=(nopipe noowner badentry range spaces ldap group)
 # Ebenen unter BASE_DIR: account/container/sub
 readonly TEST_DEPTH=3
 readonly CLIENTS=10
+# Besitzer-Recht (owner in permissions.json)
+readonly OWNER_PERM=19
+readonly OPS=.cn=ops,ou=groups,dc=firma
+readonly ADMINS=.cn=admins,ou=groups,dc=firma
+readonly READERS=.cn=readers,ou=groups,dc=firma
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 # shellcheck source=lib.sh
@@ -164,10 +177,10 @@ acl_account() {
     fi
     case $n in
         3) OWNER=hans ;;
-        7) OWNER='#admins' ;;
+        7) OWNER=$ADMINS ;;
         *) OWNER=$(cl "$n") ;;
     esac
-    ENTRIES=("$(cl $((n + 1)))=3" "svc_backup=1" "$(cl $((n + 2)))=1" "#ops=3")
+    ENTRIES=("$(cl $((n + 1)))=3" "svc_backup=1" "$(cl $((n + 2)))=1" "$OPS=3")
 }
 
 acl_container() {
@@ -177,7 +190,7 @@ acl_container() {
     HAS_ACL=1
     if (( c == 48 )); then
         OWNER=$(cl $((n + 9)))
-        ENTRIES=("$(cl $((n + 1)))=5" "#ops=16" "$(cl $((n + 1)))=16" "$(cl $((n + 9)))=8"
+        ENTRIES=("$(cl $((n + 1)))=5" "$OPS=16" "$(cl $((n + 1)))=16" "$(cl $((n + 9)))=8"
                  "cn=doc" "ou=hell" "dc=firma=3" "cn=testgroup")
         return
     fi
@@ -185,9 +198,13 @@ acl_container() {
         OWNER=$(cl $((n + 8)))
         return
     fi
+    if (( c == 50 )); then
+        ENTRIES=("$(cl $((n + 3)))=1" "$(cl $((n + 2)))=3")
+        return
+    fi
     if (( c == 51 )); then
         OWNER=$(cl $((n + 1)))
-        ENTRIES=("$(cl "$n")=1" "#ops=1")
+        ENTRIES=("$(cl "$n")=1" "$OPS=1")
         return
     fi
     if (( c == 52 )); then
@@ -200,11 +217,11 @@ acl_container() {
         1) OWNER=$(cl "$n")
            ENTRIES=("$(cl $((n + 3)))=3" "dev_user=3" "$(cl $((n + 4)))=1") ;;
         2) OWNER=$(cl $((n + 5)))
-           ENTRIES=("#readers=1" "$(cl $((n + 5)))=1" "$(cl "$n")=1") ;;
+           ENTRIES=("$READERS=1" "$(cl $((n + 5)))=1" "$(cl "$n")=1" "$(cl $((n + 1)))=1") ;;
         3) OWNER=maria
-           ENTRIES=("$(cl $((n + 6)))=3" "$(cl $((n + 7)))=1" "#ops=1") ;;
-        4) OWNER='#admins'
-           ENTRIES=("peter=3" "#ops=1") ;;
+           ENTRIES=("$(cl $((n + 6)))=3" "$(cl $((n + 7)))=1" "$OPS=1") ;;
+        4) OWNER=$ADMINS
+           ENTRIES=("peter=3" "$OPS=1") ;;
     esac
 }
 
@@ -216,27 +233,30 @@ acl_sub() {
     if (( c == 10 )); then
         HAS_ACL=1
         OWNER=$(cl $((n + 2)))
-        ENTRIES=("$(cl $((n + 3)))=1" "#ops=3")
+        ENTRIES=("$(cl $((n + 3)))=1" "$OPS=3")
     fi
 }
 
 # acl_invalid <name>: RAW = gesetzter Wert, RIGHTS = erwartete Rechte als
-# Zeilen "<clientid>;<recht>". Von Hand statt über grants(), denn hier wird
+# Zeilen "<clientid>;<recht>". Von Hand statt über merge(), denn hier wird
 # gerade das Zerlegen geprüft. Ungültige Teile geben keine Rechte.
+# /fs/invalid selbst hat keine ACL, es gibt also nichts zu erben.
 acl_invalid() {
     case $1 in
         nopipe)   RAW='@inv1=3'                    # Besitzer "@inv1=3" ist keine clientid
                   RIGHTS='' ;;
-        noowner)  RAW='|@inv2=3,#ops=1'
+        noowner)  RAW="|@inv2=3,$OPS=1"            # kein Besitzer, auch nicht geerbt
                   RIGHTS='@inv2;3' ;;
         badentry) RAW='@inv3|@inv4,@inv5=abc,=2,@inv6=1'
-                  RIGHTS=$'@inv3;3\n@inv6;1' ;;
+                  RIGHTS=$'@inv3;19\n@inv6;1' ;;
         range)    RAW='@inv3|@inv4=0,@inv5=2147483648,@inv6=2147483647'
-                  RIGHTS=$'@inv3;3\n@inv6;2147483647' ;;
+                  RIGHTS=$'@inv3;19\n@inv6;2147483647' ;;
         spaces)   RAW='@inv3| @inv4=1 , @inv5 = 1'  # um ',' egal, um '=' ungültig
-                  RIGHTS=$'@inv3;3\n@inv4;1' ;;
+                  RIGHTS=$'@inv3;19\n@inv4;1' ;;
         ldap)     RAW='@inv3|uid=hans,CN=Doc,O=firma=1,cn=3,@inv4=1'  # cn=3: User "cn"
-                  RIGHTS=$'@inv3;3\n@inv4;1' ;;
+                  RIGHTS=$'@inv3;19\n@inv4;1' ;;
+        group)    RAW='@inv3|.cn=ops,ou=groups,@inv4=1'  # Gruppe ohne Recht
+                  RIGHTS=$'@inv3;19\n@inv4;1' ;;
     esac
 }
 
@@ -245,22 +265,60 @@ acl_string() {
     echo "$OWNER|${ENTRIES[*]}"
 }
 
-# Effektive Rechte der @clientids aus OWNER/ENTRIES als "<clientid>;<recht>".
-grants() {
-    local -A rights=()
-    local entry principal value
+# merge <pfad> <acl_von des elternordners>: führt OWNER/ENTRIES mit dem
+# geerbten Stand zusammen. Nennt die ACL eine clientid, gilt dort ihr Wert
+# (mehrere Einträge verodert), sonst der geerbte; ein eigener Besitzer ersetzt
+# den geerbten, ein leerer übernimmt ihn. Merkt sich in STATE_* den Stand und
+# in GRANTS die effektiven Rechte als "<clientid>;<recht>;<acl_von>".
+# acl_von = tiefster Pfad, dessen ACL zum Recht beiträgt.
+merge() {
+    local path=$1 parent=$2 entry principal value cid perm origin owner owner_from line
+    local -A mask=() from=() own=()
+    if [[ -n $parent ]]; then
+        while IFS=';' read -r cid perm origin; do
+            [[ -z $cid ]] && continue
+            mask[$cid]=$perm
+            from[$cid]=$origin
+        done <<< "${STATE_ENTRIES[$parent]}"
+        owner=${STATE_OWNER[$parent]}
+        owner_from=${STATE_OWNER_FROM[$parent]}
+    else
+        owner=""
+        owner_from=""
+    fi
     for entry in "${ENTRIES[@]}"; do
         principal=${entry%=*}
         value=${entry##*=}
         if [[ $principal == @* ]]; then
-            rights[$principal]=$(( ${rights[$principal]:-0} | value ))
+            own[$principal]=$(( ${own[$principal]:-0} | value ))
         fi
     done
-    if [[ $OWNER == @* ]]; then
-        rights[$OWNER]=$(( ${rights[$OWNER]:-0} | 3 ))
+    for cid in "${!own[@]}"; do
+        mask[$cid]=${own[$cid]}
+        from[$cid]=$path
+    done
+    if [[ -n $OWNER ]]; then
+        owner=$OWNER
+        owner_from=$path
     fi
-    for principal in "${!rights[@]}"; do
-        echo "$principal;${rights[$principal]}"
+    STATE_OWNER[$path]=$owner
+    STATE_OWNER_FROM[$path]=$owner_from
+    STATE_ENTRIES[$path]=""
+    for cid in "${!mask[@]}"; do
+        STATE_ENTRIES[$path]+="$cid;${mask[$cid]};${from[$cid]}"$'\n'
+    done
+    if [[ $owner == @* ]]; then
+        perm=$(( ${mask[$owner]:-0} | OWNER_PERM ))
+        origin=${from[$owner]:-$owner_from}
+        # beide liegen auf derselben Kette, der längere Pfad ist der tiefere
+        (( ${#owner_from} > ${#origin} )) && origin=$owner_from
+        mask[$owner]=$perm
+        from[$owner]=$origin
+    fi
+    GRANTS[$path]=""
+    for cid in "${!mask[@]}"; do
+        line="$cid;${mask[$cid]};${from[$cid]}"
+        GRANTS[$path]+="$line"$'\n'
     done
 }
 
@@ -269,24 +327,25 @@ sort_rows() {
     LC_ALL=C sort -t';' -k1,1V -k2,2V
 }
 
-# record <pfad>: schreibt die Zeile für acls.csv aus OWNER/ENTRIES/HAS_ACL
-# und merkt sich die Rechte dieser ACL für expected_rows
+# record <pfad> <acl_von des elternordners>: schreibt die Zeile für
+# acls.csv aus OWNER/ENTRIES/HAS_ACL und führt die ACL mit dem geerbten
+# Stand zusammen (merge)
 record() {
     if (( HAS_ACL )); then
         echo "$1;$(acl_string)" >> "$acls_body"
-        GRANTS[$1]=$(grants)
+        merge "$1" "$2"
     else
         echo "$1;" >> "$acls_body"
     fi
 }
 
-# expected_rows <pfad> <acl_von>: Zeilen für expected.csv; leeres acl_von
-# heißt, kein Vorfahr hat eine ACL
+# expected_rows <pfad> <stand>: Zeilen für expected.csv aus GRANTS des
+# Pfads, dessen Stand gilt; leer heißt, kein Vorfahr hat eine ACL
 expected_rows() {
     local grant
     [[ -n $2 ]] || return 0
     while IFS= read -r grant; do
-        [[ -z $grant ]] || echo "$1;$grant;$2"
+        [[ -z $grant ]] || echo "$1;$grant"
     done <<< "${GRANTS[$2]}"
 }
 
@@ -298,7 +357,7 @@ from() {
 
 generate() {
     local n c s name account container path from_account from_container acls_body expected_body
-    local -A GRANTS=()
+    local -A GRANTS=() STATE_OWNER=() STATE_OWNER_FROM=() STATE_ENTRIES=()
     PATHS=()
     acls_body=$(mktemp)
     expected_body=$(mktemp)
@@ -307,7 +366,7 @@ generate() {
         account=$BASE_DIR/account$n
         PATHS+=("$account")
         acl_account "$n"
-        record "$account"
+        record "$account" ""
         from_account=$(from "$account" "")
         expected_rows "$account" "$from_account" >> "$expected_body"
 
@@ -315,7 +374,7 @@ generate() {
             container=$account/container$c
             PATHS+=("$container")
             acl_container "$n" "$c"
-            record "$container"
+            record "$container" "$from_account"
             from_container=$(from "$container" "$from_account")
             expected_rows "$container" "$from_container" >> "$expected_body"
 
@@ -324,7 +383,7 @@ generate() {
                 path=$container/sub
                 PATHS+=("$path")
                 acl_sub "$n" "$c"
-                record "$path"
+                record "$path" "$from_container"
                 expected_rows "$path" "$(from "$path" "$from_container")" >> "$expected_body"
             done
         done
@@ -337,7 +396,10 @@ generate() {
         PATHS+=("$path")
         acl_invalid "$name"
         echo "$path;$RAW" >> "$acls_body"
-        GRANTS[$path]=$RIGHTS
+        GRANTS[$path]=""
+        if [[ -n $RIGHTS ]]; then
+            GRANTS[$path]=$(sed "s|\$|;$path|" <<< "$RIGHTS")
+        fi
         expected_rows "$path" "$path" >> "$expected_body"
     done
     path=$BASE_DIR/invalid/noowner/sub
@@ -463,7 +525,7 @@ test_tool() {
     expect 1 "remove @client2 --new-owner @client2 abgelehnt" acl_tool remove @client2 --new-owner @client2
     expect 0 "remove @client10 --new-owner newapp --apply" acl_tool remove @client10 --new-owner newapp --apply
     value=$(hdfs_cmd dfs -getfattr -n "$ACL_ATTR" "$BASE_DIR/account1/container48" 2>/dev/null | grep "^$ACL_ATTR=" || true)
-    if [[ $value == "$ACL_ATTR=\"@newapp|@client2=5,#ops=16,@client2=16,cn=doc,ou=hell,dc=firma=3,cn=testgroup\"" ]]; then
+    if [[ $value == "$ACL_ATTR=\"@newapp|@client2=5,$OPS=16,@client2=16,cn=doc,ou=hell,dc=firma=3,cn=testgroup\"" ]]; then
         echo "  ok     newapp wird zu @newapp (account1/container48)"
     else
         echo "  FEHLER newapp als Besitzer: $value" >&2

@@ -9,9 +9,9 @@
 #   2. fsimage erzeugen und holen, damit hdfs-acl wie im echten Betrieb
 #      aus dem fsimage plant und nur die betroffenen Pfade live nachliest
 #   3. Phase 1, "add ALT NEU": beide clientids greifen. Es gibt nur einen
-#      Besitzer, ALT bleibt es; NEU bekommt dort einen Eintrag mit den
-#      Rechten des Besitzers plus ADMINISTRATION (3 + 16 = 19), sonst die
-#      Rechte von ALT. Prüfen.
+#      Besitzer, ALT bleibt es; NEU bekommt dort einen Eintrag mit dem
+#      Recht des Besitzers (19), sonst die Rechte von ALT. Container, die
+#      ACLs des Accounts einschränken, bekommen eigene Einträge. Prüfen.
 #   4. Phase 2, "replace ALT NEU": ALT wird vollständig durch NEU ersetzt,
 #      auch als Besitzer. Prüfen: effektive Rechte wie vorher, nur heißt
 #      ALT jetzt NEU; ALT steht nirgends mehr; der Rest ist unverändert.
