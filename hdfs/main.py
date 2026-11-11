@@ -51,7 +51,7 @@ from pathlib import Path
 # (python3 main.py) den Code aus src/hdfs nimmt.
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from hdfs.main import main  # noqa: E402
+from hdfs.main import main
 
 if __name__ == "__main__":
     sys.exit(main())

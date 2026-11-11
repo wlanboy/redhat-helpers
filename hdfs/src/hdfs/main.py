@@ -39,11 +39,18 @@ if __name__ == "__main__" and not __package__:
     # funktioniert wie bei "uv run hdfs-acl".
     sys.path[0] = str(Path(__file__).resolve().parent.parent)
 
-from hdfs.commands import (  # noqa: E402  (erst nach der Pfad-Korrektur oben)
-    cmd_add, cmd_clients, cmd_collect, cmd_export, cmd_remove, cmd_replace,
-    cmd_restore, cmd_search, cmd_show,
+from hdfs.commands import (
+    cmd_add,
+    cmd_clients,
+    cmd_collect,
+    cmd_export,
+    cmd_remove,
+    cmd_replace,
+    cmd_restore,
+    cmd_search,
+    cmd_show,
 )
-from hdfs.common import HdfsError, UsageError  # noqa: E402
+from hdfs.common import HdfsError, UsageError
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -12,7 +12,12 @@ from unittest import mock
 from hdfs import hdfs_client
 from hdfs.changes import Change
 from hdfs.hdfs_client import (
-    command_errors, decode_value, glob_escape, parse_getfattr, path_globs, write_script,
+    command_errors,
+    decode_value,
+    glob_escape,
+    parse_getfattr,
+    path_globs,
+    write_script,
 )
 
 

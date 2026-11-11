@@ -4,8 +4,9 @@ import io
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Optional
 
 from hdfs.common import UsageError
 from hdfs.fsimage import ROOT_ID, find_fsimage, parse_fsimage_xml, unmangle

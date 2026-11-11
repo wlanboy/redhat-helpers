@@ -17,9 +17,10 @@ import shlex
 import subprocess
 import tempfile
 import xml.etree.ElementTree as ET
+from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
-from typing import Iterator, Optional
+from typing import Optional
 
 from hdfs.common import HdfsError, info
 from hdfs.fsimage import parse_fsimage_xml

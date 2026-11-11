@@ -39,7 +39,7 @@ from typing import Optional
 
 sys.path.insert(0, str(Path(__file__).resolve().parent / "src"))
 
-from hdfs.acl import ADMIN_PERM, OWNER_PERM, Acl, covers, split_token  # noqa: E402
+from hdfs.acl import ADMIN_PERM, OWNER_PERM, Acl, covers, split_token
 
 
 def principals(raw: Optional[str]) -> set:

@@ -16,7 +16,13 @@ from datetime import datetime
 from pathlib import Path
 
 from hdfs.acl import (
-    OWNER_PERM, Acl, acl_problems, is_ldap, principal_kind, resolve_acl_from, split_token,
+    OWNER_PERM,
+    Acl,
+    acl_problems,
+    is_ldap,
+    principal_kind,
+    resolve_acl_from,
+    split_token,
 )
 from hdfs.changes import Change
 from hdfs.common import UsageError, info

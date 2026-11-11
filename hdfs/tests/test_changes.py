@@ -2,7 +2,14 @@
 
 import unittest
 
-from hdfs.changes import Change, merge_entries, plan_add, plan_remove, plan_replace, plan_restore
+from hdfs.changes import (
+    Change,
+    merge_entries,
+    plan_add,
+    plan_remove,
+    plan_replace,
+    plan_restore,
+)
 
 
 def new_values(changes: list) -> dict:

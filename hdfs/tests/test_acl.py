@@ -3,7 +3,14 @@
 import unittest
 
 from hdfs.acl import (
-    Acl, acl_problems, client_id, covers, is_ldap, principal_kind, resolve_acl_from, split_token,
+    Acl,
+    acl_problems,
+    client_id,
+    covers,
+    is_ldap,
+    principal_kind,
+    resolve_acl_from,
+    split_token,
 )
 from hdfs.common import UsageError
 
