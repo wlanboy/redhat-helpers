@@ -213,11 +213,13 @@ Großteil des Images, kosten nur Lesezeit.
 
 `--live` liest stattdessen mit je einem `getfattr` pro Ebene (`/fs/*`,
 `/fs/*/*`), nicht rekursiv. Das ist aktuell, kostet aber einen NameNode-RPC je
-Pfad, nacheinander. Gut für kleine Bestände und den Test. Ein Pfad, dessen
-Attribute nicht lesbar sind (keine Berechtigung, inzwischen gelöscht), wird
-mit Warnung übersprungen. Ist ein Ordner nicht listbar, bricht `collect` ab,
-weil das Ergebnis sonst Lücken hätte. Anders als das fsimage liefert `--live`
-auch Dateien, die direkt auf diesen Ebenen liegen.
+Pfad, nacheinander. Gut für kleine Bestände und den Test. Die Globs treffen
+auch Dateien, die direkt auf diesen Ebenen liegen; ein `ls -d` je Ebene
+(parallel zum `getfattr`) sortiert sie aus, damit wie beim fsimage nur Ordner
+in der DB landen. Ein Pfad, dessen Attribute nicht lesbar sind (keine
+Berechtigung, inzwischen gelöscht), wird mit Warnung übersprungen. Ist ein
+Ordner nicht listbar, bricht `collect` ab, weil das Ergebnis sonst Lücken
+hätte.
 
 Ergebnis ist eine SQLite-Datei mit den Tabellen
 

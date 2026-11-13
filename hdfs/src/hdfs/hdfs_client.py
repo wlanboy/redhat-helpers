@@ -141,6 +141,22 @@ def parse_getfattr(output: str, attr: str) -> dict:
     return nodes
 
 
+def parse_ls_dirs(output: str) -> set:
+    """Ausgabe von "ls -d" -> Menge der Ordner.
+
+    Eine Zeile sieht so aus, der Pfad ist alles nach der Uhrzeit (darf
+    Leerzeichen enthalten):
+        drwxr-xr-x+  - hdfs supergroup          0 2026-11-13 10:00 /fs/account1
+    Dateien beginnen mit "-", Ordner mit "d".
+    """
+    dirs = set()
+    for line in output.splitlines():
+        fields = line.split(None, 7)
+        if len(fields) == 8 and line.startswith("d"):
+            dirs.add(fields[7])
+    return dirs
+
+
 def command_errors(proc: subprocess.CompletedProcess, command: str, pattern: str) -> list:
     """Fehler eines "hdfs dfs -<command>"-Aufrufs als [(pfad oder None, zeile)].
 
@@ -273,18 +289,33 @@ class Hdfs:
                 unexplained.append((path, line))
         return nodes, skipped, unexplained
 
+    def list_dirs(self, pattern: str) -> set:
+        """Ordner, auf die der Glob passt ("ls -d", ohne deren Inhalt)."""
+        proc = self.dfs("-ls", "-d", pattern)
+        errors = command_errors(proc, "ls", pattern)
+        if errors:
+            raise HdfsError(f"ls -d {pattern} fehlgeschlagen:\n" + "\n".join(line for _, line in errors))
+        return parse_ls_dirs(proc.stdout)
+
     def read_acls(self, base: str, attr: str, depth: int) -> dict:
         """Ein getfattr je Ebene über Globs (base/*, base/*/*, ...), nicht rekursiv,
         damit Dateien unterhalb der Container nicht mitgelesen werden.
+
+        Die Globs treffen auch Dateien, die direkt auf einer Ebene liegen. Ein
+        "ls -d" je Ebene liefert die Ordner, nur die bleiben übrig, wie beim
+        fsimage (read_fsimage).
 
         Belastet den NameNode mit einem RPC je Pfad; bei Millionen Pfaden ist
         read_fsimage() der bessere Weg.
         """
         patterns = [base + "/*" * level for level in range(1, depth + 1)]
         info(f"Lese {attr} aus {', '.join(patterns)} ...")
-        # Die Ebenen sind unabhängig voneinander, also alle gleichzeitig lesen
-        with ThreadPoolExecutor(len(patterns)) as pool:
-            results = list(pool.map(lambda p: self.getfattr(p, attr), patterns))
+        # Die Ebenen und je Ebene getfattr und ls sind unabhängig, also alle gleichzeitig
+        with ThreadPoolExecutor(2 * len(patterns)) as pool:
+            acl_jobs = [pool.submit(self.getfattr, p, attr) for p in patterns]
+            dir_jobs = [pool.submit(self.list_dirs, p) for p in patterns]
+            results = [job.result() for job in acl_jobs]
+            dirs = set().union(*(job.result() for job in dir_jobs))
         nodes = {}
         for pattern, (found, skipped, errors) in zip(patterns, results):
             if errors:
@@ -293,7 +324,7 @@ class Hdfs:
                                 + "\n".join(line for _, line in errors))
             for _, line in skipped:
                 info(f"Warnung: übersprungen, {line}")
-            nodes.update(found)
+            nodes.update((path, value) for path, value in found.items() if path in dirs)
         return nodes
 
     def read_paths(self, paths: list, attr: str, strict: bool = True) -> dict:

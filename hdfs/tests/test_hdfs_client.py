@@ -1,5 +1,5 @@
 """Tests für die Teile von hdfs.hdfs_client, die kein HDFS brauchen:
-Ausgabe von getfattr auswerten, Globs bauen, Shell-Skript für --generate."""
+Ausgabe von getfattr/ls auswerten, Globs bauen, Shell-Skript für --generate."""
 
 import os
 import stat
@@ -13,10 +13,13 @@ from unittest import mock
 from hdfs import hdfs_client
 from hdfs.changes import Change
 from hdfs.hdfs_client import (
+    Hdfs,
+    HdfsError,
     command_errors,
     decode_value,
     glob_escape,
     parse_getfattr,
+    parse_ls_dirs,
     path_globs,
     write_script,
 )
@@ -37,6 +40,52 @@ class DecodeTest(unittest.TestCase):
         output = ("# file: /fs/a\nuser.acl=\"@a|@b=1\"\nuser.other=\"x\"\n\n"
                   "# file: /fs/b\n\n# file: /fs/c\nuser.acl=0x40637c\n")
         self.assertEqual(parse_getfattr(output, "user.acl"), {"/fs/a": "@a|@b=1", "/fs/b": None, "/fs/c": "@c|"})
+
+
+    def test_parse_ls_dirs(self):
+        output = ("drwxr-xr-x+  - hdfs supergroup          0 2026-11-13 10:00 /fs/a\n"
+                  "-rw-r--r--   3 hdfs supergroup         12 2026-11-13 10:00 /fs/datei\n"
+                  "drwxr-x---   - hdfs supergroup          0 2026-11-13 10:00 /fs/mit leer zeichen\n")
+        self.assertEqual(parse_ls_dirs(output), {"/fs/a", "/fs/mit leer zeichen"})
+
+
+class ReadAclsTest(unittest.TestCase):
+    """read_acls mit gefälschtem "hdfs dfs": Dateien auf den Ebenen fallen weg."""
+
+    GETFATTR: ClassVar[dict] = {
+        "/fs/*": "# file: /fs/a\nuser.acl=\"@a|\"\n# file: /fs/datei\nuser.acl=\"@d|\"\n",
+        "/fs/*/*": "# file: /fs/a/c1\n# file: /fs/a/datei\nuser.acl=\"@d|\"\n",
+    }
+    LS: ClassVar[dict] = {
+        "/fs/*": ("drwxr-xr-x   - h g 0 2026-11-13 10:00 /fs/a\n"
+                  "-rw-r--r--   3 h g 1 2026-11-13 10:00 /fs/datei\n"),
+        "/fs/*/*": ("drwxr-xr-x   - h g 0 2026-11-13 10:00 /fs/a/c1\n"
+                    "-rw-r--r--   3 h g 1 2026-11-13 10:00 /fs/a/datei\n"),
+    }
+
+    def hdfs(self, dfs) -> Hdfs:
+        client = Hdfs.__new__(Hdfs)
+        client.dfs = dfs
+        return client
+
+    def test_only_directories(self):
+        def dfs(*args):
+            if args[0] == "-getfattr":
+                return completed(stdout=self.GETFATTR[args[-1]])
+            return completed(stdout=self.LS[args[-1]])
+
+        with mock.patch.object(hdfs_client, "info"):
+            nodes = self.hdfs(dfs).read_acls("/fs", "user.acl", 2)
+        self.assertEqual(nodes, {"/fs/a": "@a|", "/fs/a/c1": None})
+
+    def test_ls_error_aborts(self):
+        def dfs(*args):
+            if args[0] == "-getfattr":
+                return completed(stdout=self.GETFATTR[args[-1]])
+            return completed(1, stderr='ls: Permission denied: user=x, access=READ_EXECUTE, inode="/fs/a"\n')
+
+        with mock.patch.object(hdfs_client, "info"), self.assertRaises(HdfsError):
+            self.hdfs(dfs).read_acls("/fs", "user.acl", 2)
 
 
 class CommandErrorsTest(unittest.TestCase):

@@ -94,7 +94,7 @@ class _Tail:
 def parse_fsimage_xml(stream: IO[bytes], base: str, attr: str, depth: int) -> dict:
     """XML von "hdfs oiv -p XML" -> {pfad: wert oder None}.
 
-    Liefert dieselben Pfade wie das Einlesen per getfattr: die Ordner auf den
+    Liefert dieselben Pfade wie --live (Hdfs.read_acls): die Ordner auf den
     Ebenen 1..depth unter base, auch ohne Attribut (None, wichtig für die
     Vererbung).
     """
