@@ -179,6 +179,15 @@ class CommandTest(unittest.TestCase):
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             build_parser().parse_args(["add", "@a", "@b", "--apply", "--generate", "x.sh"])
 
+    def test_depth_and_parallel_at_least_one(self):
+        for option in ("--depth", "--parallel"):
+            for bad in ("0", "-1", "x"):
+                with self.subTest(option=option, value=bad), redirect_stderr(io.StringIO()), \
+                        self.assertRaises(SystemExit):
+                    build_parser().parse_args(["collect", "--live", option, bad])
+        args = build_parser().parse_args(["collect", "--depth", "1", "--parallel", "3"])
+        self.assertEqual((args.depth, args.parallel), (1, 3))
+
     def test_replace_and_restore(self):
         rc, _, _ = self.run_main("replace", "@client3", "@newapp", "--live", "--accounts", "--apply")
         self.assertEqual(rc, 0)

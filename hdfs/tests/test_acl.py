@@ -89,6 +89,10 @@ class AclTest(unittest.TestCase):
         acl = Acl.parse(" @a | @b=1 ,, @c=3 ")
         self.assertEqual((acl.owner, acl.tokens), ("@a", ["@b=1", "@c=3"]))
 
+    def test_render_normalizes(self):
+        # dokumentiert in hdfs.md: Leerzeichen und leere Einträge fallen weg
+        self.assertEqual(Acl.parse("@a |@b=1, ,@c=2").render(), "@a|@b=1,@c=2")
+
     def test_owner_only(self):
         self.assertEqual(Acl.parse("@a|").tokens, [])
         self.assertEqual(Acl.parse("@a|").render(), "@a|")

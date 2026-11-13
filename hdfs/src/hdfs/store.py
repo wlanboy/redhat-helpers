@@ -134,10 +134,12 @@ def write_backup(db: Path, label: str, changes: list) -> Path:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     folder = db.resolve().parent
     # Zwei Backups derselben Aktion in derselben Sekunde: "x" legt nur neu an,
-    # das zweite bekommt eine Nummer statt das erste zu überschreiben
+    # das zweite bekommt eine Nummer statt das erste zu überschreiben. Die
+    # Nummer steht vor der Aktion, damit "hdfs-acl-backup-*-<aktion>.csv"
+    # (latest_backup in test.sh/migrate.sh) weiter passt.
     for number in itertools.count(1):
         suffix = "" if number == 1 else f"-{number}"
-        backup = folder / f"hdfs-acl-backup-{stamp}-{label}{suffix}.csv"
+        backup = folder / f"hdfs-acl-backup-{stamp}{suffix}-{label}.csv"
         try:
             file = backup.open("x", newline="")
         except FileExistsError:

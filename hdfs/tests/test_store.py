@@ -9,6 +9,7 @@ import unittest
 from contextlib import redirect_stderr
 from pathlib import Path
 from typing import ClassVar
+from unittest import mock
 
 from hdfs.changes import Change
 from hdfs.common import UsageError, natural_key
@@ -89,6 +90,31 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(backup.parent, self.dir)
         self.assertRegex(backup.name, r"^hdfs-acl-backup-\d{8}-\d{6}-add-n\.csv$")
         self.assertEqual(read_backup(str(backup)), changes)
+
+    def test_backup_empty_attribute(self):
+        # "" (Attribut da, aber leer) darf nicht zu None (kein Attribut) werden
+        changes = [Change("/fs/a", "", "@o|"), Change("/fs/b", "@o|", ""),
+                   Change("/fs/c", "", ""), Change("/fs/d", None, "@o|")]
+        backup = write_backup(self.db, "add-n", changes)
+        self.assertEqual(read_backup(str(backup)), changes)
+
+    def test_backup_old_format(self):
+        # Backups ohne Spalte empty: leeres Feld = kein Attribut
+        backup = self.dir / "alt.csv"
+        backup.write_text("path;old;new\n/fs/a;;@o|\n/fs/b;@o|;\n")
+        self.assertEqual(read_backup(str(backup)),
+                         [Change("/fs/a", None, "@o|"), Change("/fs/b", "@o|", None)])
+
+    def test_backup_same_second(self):
+        first = write_backup(self.db, "add-n", [Change("/fs/a", None, "@o|")])
+        with mock.patch("hdfs.store.datetime") as clock:
+            # dieselbe Sekunde wie das erste: hdfs-acl-backup-<YYYYMMDD-HHMMSS>-add-n.csv
+            clock.now.return_value.strftime.return_value = "-".join(first.name.split("-")[3:5])
+            second = write_backup(self.db, "add-n", [Change("/fs/b", None, "@o|")])
+            third = write_backup(self.db, "add-n", [Change("/fs/c", None, "@o|")])
+        self.assertEqual(second.name, first.name.replace("-add-n", "-2-add-n"))
+        self.assertEqual(third.name, first.name.replace("-add-n", "-3-add-n"))
+        self.assertEqual(read_backup(str(first)), [Change("/fs/a", None, "@o|")])
 
 
 class OutputTest(unittest.TestCase):

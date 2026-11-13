@@ -279,7 +279,7 @@ des letzten `collect`, Zeitpunkt und Quelle stehen auf stderr.
    Feld in `old`/`new` heißt „kein Attribut“. Ein vorhandenes, aber leeres
    Attribut steht in `empty` (`old`, `new` oder `old,new`), damit `restore` es
    wieder leer setzt statt es zu entfernen. Entstehen in derselben Sekunde zwei
-   Backups derselben Aktion, bekommt das zweite eine Nummer (`…-2.csv`).
+   Backups derselben Aktion, bekommt das zweite eine Nummer vor der Aktion (`…-<zeit>-2-<aktion>.csv`).
 4. Die geänderten Pfade erneut lesen, jeden Wert prüfen und die DB mit dem
    Ergebnis fortschreiben (Quelle z. B. `fsimage_… + replace-client3-newapp`).
 
