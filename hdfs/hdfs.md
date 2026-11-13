@@ -275,7 +275,11 @@ des letzten `collect`, Zeitpunkt und Quelle stehen auf stderr.
    live, das fsimage kennt die zurückzudrehenden Änderungen meist noch nicht.
 3. Für jeden betroffenen Pfad alt/neu zeigen und **erst mit `--apply`**
    schreiben. Vorher entsteht neben der DB ein Backup
-   `hdfs-acl-backup-<zeit>-<aktion>.csv` (`path;old;new`).
+   `hdfs-acl-backup-<zeit>-<aktion>.csv` (`path;old;new;empty`). Ein leeres
+   Feld in `old`/`new` heißt „kein Attribut“. Ein vorhandenes, aber leeres
+   Attribut steht in `empty` (`old`, `new` oder `old,new`), damit `restore` es
+   wieder leer setzt statt es zu entfernen. Entstehen in derselben Sekunde zwei
+   Backups derselben Aktion, bekommt das zweite eine Nummer (`…-2.csv`).
 4. Die geänderten Pfade erneut lesen, jeden Wert prüfen und die DB mit dem
    Ergebnis fortschreiben (Quelle z. B. `fsimage_… + replace-client3-newapp`).
 
@@ -296,7 +300,9 @@ bekommen hat, fehlt im Plan. Nach dem nächsten Checkpoint erneut ausführen
 
 Geändert werden nur Pfade mit eigener ACL. Container ohne ACL ändern sich
 über ihren Account automatisch mit. Einträge für User, Gruppen und andere
-Client-IDs bleiben Wort für Wort erhalten.
+Client-IDs bleiben Wort für Wort erhalten. In einer ACL, die geändert wird,
+fallen nur Leerzeichen um Besitzer und Einträge und leere Einträge weg
+(`@a |@b=1, ,@c=2` wird `@a|@b=1,@c=2`). ACLs ohne Änderung bleiben ganz unberührt.
 
 `add` und `replace` übertragen nur **explizite** Rechte: was ALT in einer
 ACL selbst stehen hat, als Besitzer oder Eintrag. Geerbte Rechte lösen nichts
@@ -415,8 +421,8 @@ Ein zweites `restore` desselben Backups ist deshalb unschädlich, ebenso ein
 
 Gemeinsame Optionen: `--db` (`$HDFS_ACL_DB`, Default `./hdfs-acl.db`),
 `--base-dir` (`$BASE_DIR`), `--attr` (`$ACL_ATTR`), `--depth` (`$DEPTH`,
-Default 2), `--fsimage`
-(`$HDFS_FSIMAGE`), `--live`, `--parallel` (`$PARALLEL`, Default 8),
+Default 2, mindestens 1), `--fsimage`
+(`$HDFS_FSIMAGE`), `--live`, `--parallel` (`$PARALLEL`, Default 8, mindestens 1),
 `--hadoop-version` (`$HADOOP_VERSION`, Default 3.4.2).
 
 ### Viele Container

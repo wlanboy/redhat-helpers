@@ -115,7 +115,12 @@ class Acl:
         return cls(owner.strip(), split_entries(rest))
 
     def render(self) -> str:
-        """Gegenstück zu parse(): ergibt den Wert, der ins xattr geschrieben wird."""
+        """Gegenstück zu parse(): ergibt den Wert, der ins xattr geschrieben wird.
+
+        Die Einträge kommen im Wortlaut zurück, aber normalisiert: Leerzeichen
+        um Besitzer und Einträge und leere Einträge fallen weg
+        ("@a |@b=1, ,@c=2" -> "@a|@b=1,@c=2").
+        """
         return f"{self.owner}|{','.join(self.tokens)}"
 
     def client_entries(self) -> dict:

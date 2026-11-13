@@ -62,6 +62,17 @@ from hdfs.permissions import activate
 from hdfs.permissions import find as find_permissions
 
 
+def positive_int(value: str) -> int:
+    """argparse-Typ für --depth und --parallel: ganze Zahl ab 1."""
+    try:
+        number = int(value)
+    except ValueError:
+        number = 0
+    if number < 1:
+        raise argparse.ArgumentTypeError(f"erwartet eine ganze Zahl ab 1, nicht '{value}'")
+    return number
+
+
 def build_parser() -> argparse.ArgumentParser:
     # Optionsgruppen als Eltern-Parser: jedes Kommando bekommt nur die Optionen,
     # die es braucht (lesende z. B. kein --apply und keine HDFS-Optionen)
@@ -78,7 +89,7 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Basisordner in HDFS (Default: $BASE_DIR oder /fs)")
     hdfs_opts.add_argument("--attr", default=os.environ.get("ACL_ATTR", "user.acl"),
                            help="Name des xattr (Default: $ACL_ATTR oder user.acl)")
-    hdfs_opts.add_argument("--depth", type=int, default=int(os.environ.get("DEPTH", "2")),
+    hdfs_opts.add_argument("--depth", type=positive_int, default=os.environ.get("DEPTH", "2"),
                            help="Ebenen unter dem Basisordner (Default: $DEPTH oder 2, "
                                 "Account/Container)")
     hdfs_opts.add_argument("--fsimage", default=os.environ.get("HDFS_FSIMAGE"),
@@ -87,7 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     hdfs_opts.add_argument("--live", action="store_true",
                            help="HDFS per getfattr lesen statt aus dem fsimage "
                                 "(ein NameNode-RPC je Pfad, für kleine Bestände)")
-    hdfs_opts.add_argument("--parallel", type=int, default=int(os.environ.get("PARALLEL", "8")),
+    hdfs_opts.add_argument("--parallel", type=positive_int, default=os.environ.get("PARALLEL", "8"),
                            help="parallele hdfs-Aufrufe beim Nachlesen/Schreiben "
                                 "(Default: $PARALLEL oder 8)")
     hdfs_opts.add_argument("--hadoop-version", default=os.environ.get("HADOOP_VERSION", "3.4.2"),

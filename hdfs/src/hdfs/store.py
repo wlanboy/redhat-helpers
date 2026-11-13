@@ -9,6 +9,7 @@ clients, show, export) brauchen deshalb kein HDFS.
 from __future__ import annotations
 
 import csv
+import itertools
 import os
 import posixpath
 import sqlite3
@@ -123,24 +124,47 @@ def open_db(db: Path) -> sqlite3.Connection:
 
 
 def write_backup(db: Path, label: str, changes: list) -> Path:
-    """Schreibt die geplanten Changes als CSV (path;old;new) neben die DB.
+    """Schreibt die geplanten Changes als CSV (path;old;new;empty) neben die DB.
 
-    Leere Felder stehen für "kein Attribut". read_backup() liest die Datei für
+    Ein leeres Feld steht für "kein Attribut". Ein vorhandenes, aber leeres
+    Attribut ("") nennt die Spalte empty ("old", "new" oder "old,new"), denn
+    in der CSV sähe es sonst genauso aus. read_backup() liest die Datei für
     restore wieder ein.
     """
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    backup = db.resolve().parent / f"hdfs-acl-backup-{stamp}-{label}.csv"
-    with backup.open("w", newline="") as file:
+    folder = db.resolve().parent
+    # Zwei Backups derselben Aktion in derselben Sekunde: "x" legt nur neu an,
+    # das zweite bekommt eine Nummer statt das erste zu überschreiben
+    for number in itertools.count(1):
+        suffix = "" if number == 1 else f"-{number}"
+        backup = folder / f"hdfs-acl-backup-{stamp}-{label}{suffix}.csv"
+        try:
+            file = backup.open("x", newline="")
+        except FileExistsError:
+            continue
+        break
+    with file:
         # ';' als Trenner, weil die ACL-Werte selbst ',' und '|' enthalten
         writer = csv.writer(file, delimiter=";", lineterminator="\n")
-        writer.writerow(["path", "old", "new"])
+        writer.writerow(["path", "old", "new", "empty"])
         for change in changes:
-            writer.writerow([change.path, change.old or "", change.new or ""])
+            empty = ",".join(name for name, value in (("old", change.old), ("new", change.new))
+                             if value == "")
+            writer.writerow([change.path, change.old or "", change.new or "", empty])
     return backup
 
 
 def read_backup(path: str) -> list:
-    """Gegenstück zu write_backup(): CSV -> [Change]."""
+    """Gegenstück zu write_backup(): CSV -> [Change].
+
+    Backups ohne Spalte empty (ältere Versionen) kennen kein leeres Attribut,
+    dort ist jedes leere Feld "kein Attribut".
+    """
+    def value(row: dict, name: str) -> str | None:
+        if row[name]:
+            return row[name]
+        return "" if name in (row.get("empty") or "").split(",") else None
+
     with open(path, newline="") as file:
-        return [Change(row["path"], row["old"] or None, row["new"] or None)
+        return [Change(row["path"], value(row, "old"), value(row, "new"))
                 for row in csv.DictReader(file, delimiter=";")]

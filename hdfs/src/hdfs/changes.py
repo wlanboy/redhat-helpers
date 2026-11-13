@@ -8,7 +8,8 @@ Gemeinsame Regeln:
 - Geändert werden nur Pfade mit eigener ACL. Pfade, die erben, ändern sich
   über ihren Elternordner automatisch mit.
 - Einträge für User, Gruppen und andere clientids bleiben Wort für Wort
-  und an ihrer Stelle erhalten.
+  und an ihrer Stelle erhalten. In einer geänderten ACL fallen nur
+  Leerzeichen um die Einträge und leere Einträge weg (Acl.render).
 - add und replace übertragen nur explizite Rechte: was ALT in einer ACL
   selbst stehen hat (Besitzer oder Eintrag). Geerbte Rechte lösen nichts
   aus, jede ACL wird für sich umgeschrieben. Container, die ALT nicht
