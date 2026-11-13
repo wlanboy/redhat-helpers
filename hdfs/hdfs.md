@@ -321,6 +321,7 @@ hdfs-acl add @client3 @newapp --apply
 hdfs-acl add @client3 @newapp --generate add-newapp.sh   # oder: Skript statt schreiben
 hdfs-acl add @client3 @newapp --accounts --apply         # Accounts mitmigrieren
 hdfs-acl add @client3 @newapp --account account3 --apply # nur Container von account3
+hdfs-acl add @client3 @newapp --permission READ_WRITE    # überall @newapp=3, wo @client3 steht
 ```
 
 - Ist `@client3` Besitzer, bleibt es Besitzer, denn eine ACL hat nur
@@ -334,6 +335,11 @@ hdfs-acl add @client3 @newapp --account account3 --apply # nur Container von acc
 - Schränkt eine Container-ACL `@client3` ein (`@client3=1`), bekommt
   `@newapp` dort denselben Eintrag. Container, die `@client3` nicht nennen,
   bleiben unverändert.
+- `--permission RECHT` (Zahl oder Name aus der Rechte-Tabelle, z. B.
+  `READ_WRITE`) gibt `@newapp` in jeder ACL, die `@client3` nennt, genau
+  dieses Recht statt der Bits von `@client3`, auch wo `@client3` Besitzer
+  ist. Aus `@client3|@test1=1` wird `@client3|@test1=1,@newapp=3`. Auch hier
+  wird nie ein Bit entfernt: ein vorhandenes `@newapp=19` bleibt.
 - Mehrfach ausführen ist unschädlich.
 
 ```bash

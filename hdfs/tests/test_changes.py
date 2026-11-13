@@ -84,6 +84,19 @@ class PlanAddTest(unittest.TestCase):
         changes, found = plan_add(nodes, "@client3", "@newapp")
         self.assertEqual((new_values(changes), found), ({"/fs/a": "@client3|@newapp=19"}, 1))
 
+    def test_fixed_permission(self):
+        # --permission: überall dieses Recht, egal welches QUELLE hat, auch als Besitzer
+        nodes = {"/fs/a": "@client3|@x=1", "/fs/a/c": "@o|@client3=1", "/fs/a/d": "@o|@x=1"}
+        changes, found = plan_add(nodes, "@client3", "@newapp", 3)
+        self.assertEqual(found, 2)
+        self.assertEqual(new_values(changes), {"/fs/a": "@client3|@x=1,@newapp=3",
+                                               "/fs/a/c": "@o|@client3=1,@newapp=3"})
+
+    def test_fixed_permission_never_downgrades(self):
+        nodes = {"/fs/a": "@o|@client3=1,@newapp=19", "/fs/b": "@o|@client3=1,@newapp=4"}
+        changes, _ = plan_add(nodes, "@client3", "@newapp", 3)
+        self.assertEqual(new_values(changes), {"/fs/b": "@o|@client3=1,@newapp=7"})
+
 
 class PlanReplaceTest(unittest.TestCase):
     def test_entry_renamed_in_place(self):

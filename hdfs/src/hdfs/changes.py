@@ -66,7 +66,7 @@ def set_entry(tokens: list, principal: str, mask: int) -> list:
     return result
 
 
-def plan_add(nodes: dict, source: str, new: str) -> tuple:
+def plan_add(nodes: dict, source: str, new: str, perm: int | None = None) -> tuple:
     """NEU bekommt in jeder ACL, die QUELLE explizit nennt, deren Bits dazu (Migration).
 
     Phase 1 einer Migration: beide clientids greifen. Eine ACL hat nur einen
@@ -78,6 +78,9 @@ def plan_add(nodes: dict, source: str, new: str) -> tuple:
     Nur explizite Rechte: Gezählt werden der Besitzer und die Einträge dieser
     ACL, nichts Geerbtes. Schränkt ein Container QUELLE ein (@quelle=1),
     bekommt NEU dort denselben Eintrag.
+
+    perm gesetzt (--permission): NEU bekommt in jeder ACL, die QUELLE nennt,
+    genau diese Bits statt der von QUELLE, auch wo QUELLE Besitzer ist.
 
     Liefert (changes, found); found = Anzahl ACLs, in denen QUELLE vorkommt,
     damit der Aufrufer "QUELLE steht nirgends" von "schon alles erledigt"
@@ -96,15 +99,18 @@ def plan_add(nodes: dict, source: str, new: str) -> tuple:
         found += 1
         # explizites Recht in dieser ACL: ist QUELLE Besitzer, bekommt NEU das
         # Besitzer-Recht plus Verwaltungsrecht (=19)
-        perm, source_owns = rights[source]
-        if source_owns:
-            perm |= active().admin
-        if covers(rights.get(new, (0, False))[0], perm):
+        if perm is None:
+            wanted, source_owns = rights[source]
+            if source_owns:
+                wanted |= active().admin
+        else:
+            wanted = perm
+        if covers(rights.get(new, (0, False))[0], wanted):
             continue
         # anhängen; vorhandene Einträge von NEU werden an ihrer Stelle um die
         # fehlenden Bits ergänzt. Ist NEU Besitzer, bleibt der Eintrag trotzdem,
         # denn er trägt Bits, die das Besitzer-Recht nicht hat.
-        tokens = merge_entries(acl.tokens + [f"{new}={perm}"], new)
+        tokens = merge_entries(acl.tokens + [f"{new}={wanted}"], new)
         changes.append(Change(path, raw, Acl(acl.owner, tokens).render()))
     return changes, found
 

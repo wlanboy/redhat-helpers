@@ -35,6 +35,8 @@ Beispiele:
   # @neu in jeder ACL, die @alt nennt, mit dessen Rechten ergänzen (erst Plan, dann schreiben)
   uv run main.py add @alt @neu
   uv run main.py add @alt @neu --apply
+  # @neu überall, wo @alt steht, mit festem Recht statt den Rechten von @alt
+  uv run main.py add @alt @neu --permission READ_WRITE
   export DEPTH=3 HADOOP_CONF_DIR=$PWD/namenode
   uv run main.py add @client1 @client2 --fsimage ./fsimage_0000000000000001017 --generate add-neu.sh
                                                       # statt --apply: Skript mit allen

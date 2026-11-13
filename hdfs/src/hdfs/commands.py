@@ -328,11 +328,13 @@ def cmd_add(args: argparse.Namespace) -> int:
     source, new = client_id(args.source), client_id(args.new)
     if source == new:
         raise UsageError("QUELLE und NEU sind gleich.")
+    # --permission: NEU bekommt überall dieses Recht statt der Bits von QUELLE
+    perm = active().parse(args.permission) if args.permission is not None else None
     hdfs = Hdfs(args.parallel, args.hadoop_version)
     nodes, origin = refresh(args, hdfs)
-    changes, _ = plan_add(migration_scope(args, nodes), source, new)
+    changes, _ = plan_add(migration_scope(args, nodes), source, new, perm)
     nodes = recheck(args, hdfs, nodes, [c.path for c in changes])
-    changes, found = plan_add(migration_scope(args, nodes), source, new)
+    changes, found = plan_add(migration_scope(args, nodes), source, new, perm)
     if not found:
         print(f"{source} steht in keiner ACL{scope_note(args)}.")
         return 0

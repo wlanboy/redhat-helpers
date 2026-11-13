@@ -13,7 +13,8 @@ Kommandos:
   count               Anzahl der Einträge in der DB (Pfade, ACLs, Rechte, clientids)
   show PFAD           ACL eines Pfads und die Rechte daraus
   export              Rechte je ACL als CSV (Format wie testdata/expected.csv)
-  add QUELLE NEU      NEU mit den Rechten von QUELLE ergänzen (Migration)
+  add QUELLE NEU      NEU mit den Rechten von QUELLE ergänzen (Migration),
+                      mit --permission RECHT überall mit diesem Recht
   replace ALT NEU     ALT durch NEU ersetzen, auch als Besitzer
                       (add/replace: nur Container, mit --accounts auch Accounts,
                       mit --account NAME nur unter diesem Account)
@@ -145,6 +146,9 @@ def build_parser() -> argparse.ArgumentParser:
                        help="clientid ergänzen (Migration)")
     p.add_argument("source", metavar="QUELLE", help="vorhandene clientid")
     p.add_argument("new", metavar="NEU", help="clientid, die dieselben Rechte bekommt")
+    p.add_argument("--permission", metavar="RECHT",
+                   help="NEU bekommt überall, wo QUELLE steht, dieses Recht statt der Bits "
+                        "von QUELLE, als Zahl oder Namen: 3, READ_WRITE")
     p.set_defaults(func=cmd_add)
 
     p = sub.add_parser("replace", parents=[db_opts, hdfs_opts, scope_opts, write_opts],
