@@ -69,7 +69,7 @@ class CommandTest(unittest.TestCase):
     # --- ändernde Kommandos ---------------------------------------------------
 
     def test_add_dry_run(self):
-        rc, out, _ = self.run_main("add", "@client3", "@newapp", "--live")
+        rc, out, _ = self.run_main("add", "@client3", "@newapp", "--live", "--accounts")
         self.assertEqual(rc, 0)
         self.assertIn("neu: @client3|@test1=1,@test2=2,@newapp=19", out)
         self.assertIn("2 Pfade betroffen.", out)
@@ -77,18 +77,42 @@ class CommandTest(unittest.TestCase):
         self.assertEqual((self.hdfs.writes, self.backups()), (0, []))
 
     def test_add_apply(self):
-        rc, out, _ = self.run_main("add", "@client3", "@newapp", "--live", "--apply")
+        rc, out, _ = self.run_main("add", "@client3", "@newapp", "--live", "--accounts", "--apply")
         self.assertEqual(rc, 0, out)
         self.assertIn("OK: 2 Pfade geändert und geprüft.", out)
         self.assertEqual(self.hdfs.nodes["/fs/account1/container2"], "@o|@client3=1,.cn=ops,ou=groups,dc=firma=3,@newapp=1")
         self.assertEqual(len(self.backups()), 1)
         # danach nichts mehr zu tun
-        rc, out, _ = self.run_main("add", "@client3", "@newapp", "--live")
+        rc, out, _ = self.run_main("add", "@client3", "@newapp", "--live", "--accounts")
         self.assertIn("Keine Änderungen nötig.", out)
+
+    def test_add_containers_only(self):
+        # Default: nur Container, der Account mit @client3 als Besitzer bleibt
+        rc, out, _ = self.run_main("add", "@client3", "@newapp", "--live", "--apply")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("OK: 1 Pfade geändert und geprüft.", out)
+        self.assertEqual(self.hdfs.nodes["/fs/account1"], NODES["/fs/account1"])
+        self.assertEqual(self.hdfs.nodes["/fs/account1/container2"],
+                         "@o|@client3=1,.cn=ops,ou=groups,dc=firma=3,@newapp=1")
+
+    def test_replace_containers_only(self):
+        rc, out, _ = self.run_main("replace", "@client3", "@newapp", "--live", "--apply")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.hdfs.nodes["/fs/account1"], NODES["/fs/account1"])
+        self.assertEqual(self.hdfs.nodes["/fs/account1/container2"],
+                         "@o|@newapp=1,.cn=ops,ou=groups,dc=firma=3")
+
+    def test_only_in_account(self):
+        # @test1 steht nur in einer Account-ACL
+        rc, out, _ = self.run_main("replace", "@test1", "@newapp", "--live")
+        self.assertEqual(rc, 0)
+        self.assertIn("@test1 steht in keiner ACL eines Containers (Accounts mit --accounts).", out)
+        rc, out, _ = self.run_main("add", "@test1", "@newapp", "--live")
+        self.assertIn("@test1 steht in keiner ACL eines Containers", out)
 
     def test_add_generate(self):
         script = self.dir / "add-newapp.sh"
-        rc, out, _ = self.run_main("add", "@client3", "@newapp", "--live", "--generate", str(script))
+        rc, out, _ = self.run_main("add", "@client3", "@newapp", "--live", "--accounts", "--generate", str(script))
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.hdfs.writes, 0)
         self.assertEqual(self.hdfs.nodes, NODES)
@@ -109,7 +133,7 @@ class CommandTest(unittest.TestCase):
     def test_generate_nothing_to_do(self):
         script = self.dir / "x.sh"
         # @client3 hat als Besitzer schon alle Bits von @test1
-        rc, out, _ = self.run_main("add", "@test1", "@client3", "--live", "--generate", str(script))
+        rc, out, _ = self.run_main("add", "@test1", "@client3", "--live", "--accounts", "--generate", str(script))
         self.assertEqual(rc, 0)
         self.assertIn("Keine Änderungen nötig.", out)
         self.assertFalse(script.exists())
@@ -119,7 +143,7 @@ class CommandTest(unittest.TestCase):
             build_parser().parse_args(["add", "@a", "@b", "--apply", "--generate", "x.sh"])
 
     def test_replace_and_restore(self):
-        rc, _, _ = self.run_main("replace", "@client3", "@newapp", "--live", "--apply")
+        rc, _, _ = self.run_main("replace", "@client3", "@newapp", "--live", "--accounts", "--apply")
         self.assertEqual(rc, 0)
         self.assertEqual(self.hdfs.nodes["/fs/account1"], "@newapp|@test1=1,@test2=2")
         (backup,) = self.backups()
@@ -128,7 +152,7 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(self.hdfs.nodes, NODES)
 
     def test_restore_conflict(self):
-        self.run_main("replace", "@client3", "@newapp", "--live", "--apply")
+        self.run_main("replace", "@client3", "@newapp", "--live", "--accounts", "--apply")
         (backup,) = self.backups()
         self.hdfs.nodes["/fs/account1"] = "@jemand|"
         rc, _, err = self.run_main("restore", str(backup), "--live", "--apply")

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# migrate.sh [ALT] [NEU] [--direct] [--keep]
+# migrate.sh [ALT] [NEU] [--direct] [--accounts] [--keep]
 #
 # Spielt eine Migration ALT -> NEU (Default @client3 -> @newapp) mit
 # hdfs-acl auf einem frischen NameNode durch und prüft jede Phase:
@@ -20,7 +20,9 @@
 #   5. Beide Backups rückwärts mit restore zurückspielen und prüfen, dass
 #      HDFS wieder genau den Testdaten entspricht
 #
-# --direct  ohne Phase 1, nur "replace ALT NEU" (beide greifen nie zugleich)
+# --direct    ohne Phase 1, nur "replace ALT NEU" (beide greifen nie zugleich)
+# --accounts  auch die Accounts migrieren (add/replace --accounts); ohne nur
+#             die Container, die Accounts müssen dann unverändert bleiben
 #
 # Container und Arbeitsordner werden am Ende gelöscht, mit --keep nicht.
 # ALT und NEU ohne "@" bekommen es ergänzt. NEU darf schon Rechte haben
@@ -43,6 +45,7 @@ PARALLEL=${PARALLEL:-8}
 OLD=""
 NEW=""
 DIRECT=0
+SCOPE=()
 
 usage() {
     sed -n '3,/^$/p' "$0" | sed 's/^# \{0,1\}//'
@@ -51,6 +54,7 @@ usage() {
 for arg in "$@"; do
     case $arg in
         --direct) DIRECT=1 ;;
+        --accounts) SCOPE=(--accounts) ;;
         --keep) KEEP=1 ;;
         -h|--help) usage; exit 0 ;;
         -*) echo "Fehler: Unbekannte Option '$arg' (siehe --help)." >&2; exit 1 ;;
@@ -99,7 +103,7 @@ latest_backup() {
 check() {
     echo "Prüfe $1 ..."
     step "collect --live" acl_tool collect --live --db "$WORK_DIR/work/check.db"
-    python3 "$SCRIPT_DIR/migrate_check.py" "${@:2}" \
+    python3 "$SCRIPT_DIR/migrate_check.py" "${@:2}" "${SCOPE[@]}" \
         --acls "$TESTDATA/acls.csv" --expected "$TESTDATA/expected.csv" \
         --db "$WORK_DIR/work/check.db"
 }
@@ -142,11 +146,11 @@ apply() {
 
 if (( ! DIRECT )); then
     echo "Phase 1: $OLD und $NEW greifen beide (add) ..."
-    apply add "add-${NEW#@}" "$OLD" "$NEW"
+    apply add "add-${NEW#@}" "$OLD" "$NEW" "${SCOPE[@]}"
     check "Phase 1" --stage added --old "$OLD" --new "$NEW" || FAILED=1
 fi
 echo "Phase 2: $OLD vollständig durch $NEW ersetzen (replace) ..."
-apply replace "replace-${OLD#@}-${NEW#@}" "$OLD" "$NEW"
+apply replace "replace-${OLD#@}-${NEW#@}" "$OLD" "$NEW" "${SCOPE[@]}"
 PHASE2=(--stage replaced --old "$OLD" --new "$NEW")
 (( DIRECT )) || PHASE2+=(--after-add)
 check "Phase 2" "${PHASE2[@]}" || FAILED=1

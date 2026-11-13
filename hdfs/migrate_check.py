@@ -26,6 +26,9 @@ explizit stehen hat. --stage wählt, was gelten muss:
             aus Phase 1 dort, wo ALT Besitzer war.
   restored  nach dem Zurückdrehen: Rechte und ACLs genau wie in den Testdaten.
 
+Ohne --accounts migrieren add und replace nur Container: die Accounts (erste
+Ebene unter --base-dir) müssen dann bei added/replaced unverändert sein.
+
 Exit-Code 0, wenn alles stimmt, sonst 1.
 """
 
@@ -33,6 +36,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import os
 import sqlite3
 import sys
 from pathlib import Path
@@ -68,11 +72,12 @@ def read_csv(path: Path) -> list:
 
 
 def want_rights(expected: list, owners: dict, stage: str, old: str, new: str,
-                after_add: bool) -> dict:
+                after_add: bool, migrated) -> dict:
     """Erwartete Rechte je ACL {(pfad, clientid): recht}.
 
     owners: {pfad: besitzer} aus acls.csv. Wo ALT Besitzer der ACL ist,
     bekommt NEU bei add zusätzlich das Verwaltungsrecht (active().admin).
+    migrated(pfad): ob add/replace den Pfad anfassen durfte.
     """
     rights = {}
 
@@ -82,7 +87,9 @@ def want_rights(expected: list, owners: dict, stage: str, old: str, new: str,
     for row in expected:
         path, clientid, perm = row["path"], row["clientid"], int(row["perm"])
         admin = active().admin if clientid == old and owners.get(path) == old else 0
-        if stage == "replaced" and clientid == old:
+        if not migrated(path):
+            grant(path, clientid, perm)
+        elif stage == "replaced" and clientid == old:
             # ALT heißt jetzt NEU; nach add bleibt das Verwaltungsrecht aus Phase 1
             grant(path, new, perm | (admin if after_add else 0))
         else:
@@ -124,6 +131,10 @@ def main() -> int:
     parser.add_argument("--new", help="clientid nach der Migration")
     parser.add_argument("--after-add", action="store_true",
                         help="--stage replaced nach Phase 1 (add): NEU behält den Eintrag aus Phase 1")
+    parser.add_argument("--accounts", action="store_true",
+                        help="add/replace liefen mit --accounts: auch Accounts sind migriert")
+    parser.add_argument("--base-dir", default=os.environ.get("BASE_DIR", "/fs"),
+                        help="Basisordner der Testdaten (Default: $BASE_DIR oder /fs)")
     parser.add_argument("--acls", type=Path, required=True, help="acls.csv von test.sh")
     parser.add_argument("--expected", type=Path, required=True, help="expected.csv von test.sh")
     parser.add_argument("--db", type=Path, required=True, help="DB von collect --live")
@@ -141,11 +152,17 @@ def main() -> int:
                      for path, clientid, perm in con.execute("SELECT path, clientid, perm FROM rights")}
 
     errors = []
+    prefix = args.base_dir.rstrip("/") + "/"
+
+    def migrated(path: str) -> bool:
+        """Account (erste Ebene) nur mit --accounts, Container immer."""
+        return args.accounts or "/" in path.removeprefix(prefix)
 
     # Rechte je ACL
     acls = read_csv(args.acls)
     owners = {row["path"]: Acl.parse(row["acl"]).owner for row in acls if row["acl"]}
-    wanted = want_rights(read_csv(args.expected), owners, args.stage, args.old, args.new, args.after_add)
+    wanted = want_rights(read_csv(args.expected), owners, args.stage, args.old, args.new, args.after_add,
+                         migrated)
     for key in sorted(wanted.keys() | actual_rights.keys()):
         want, got = wanted.get(key), actual_rights.get(key)
         if want != got:
@@ -160,7 +177,8 @@ def main() -> int:
             continue
         after = actual_acl[path]
         # before is None: ohne ACL kann ALT nicht drinstehen (so auch für pyright klar)
-        if args.stage == "restored" or before is None or args.old not in principals(before):
+        if (args.stage == "restored" or before is None or args.old not in principals(before)
+                or not migrated(path)):
             unchanged += 1
             if after != before:
                 errors.append(f"{path}: hätte sich nicht ändern dürfen, {before!r} -> {after!r}")
@@ -185,7 +203,7 @@ def main() -> int:
         print(f"  {unchanged} Pfade, {len(actual_rights)} Rechte verglichen")
     else:
         print(f"  {touched} ACLs mit {args.old} (davon {owned}-mal Besitzer), "
-              f"{unchanged} Pfade ohne {args.old} unverändert")
+              f"{unchanged} Pfade ohne {args.old} oder nicht migriert unverändert")
         print(f"  {args.old} steht in {paths_of(actual_rights, args.old)} ACLs "
               f"(erwartet {paths_of(wanted, args.old)}), "
               f"{args.new} an {paths_of(actual_rights, args.new)} (erwartet {paths_of(wanted, args.new)})")

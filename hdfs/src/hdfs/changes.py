@@ -12,7 +12,8 @@ Gemeinsame Regeln:
 - add und replace übertragen nur explizite Rechte: was ALT in einer ACL
   selbst stehen hat (Besitzer oder Eintrag). Geerbte Rechte lösen nichts
   aus, jede ACL wird für sich umgeschrieben. Container, die ALT nicht
-  nennen, erben NEU vom Account wie zuvor ALT.
+  nennen, erben NEU vom Account wie zuvor ALT, sofern der Account
+  mitmigriert wird (--accounts, die Auswahl trifft commands.migration_scope).
 """
 
 from __future__ import annotations

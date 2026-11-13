@@ -300,11 +300,20 @@ Client-IDs bleiben Wort für Wort erhalten.
 ACL selbst stehen hat, als Besitzer oder Eintrag. Geerbte Rechte lösen nichts
 aus, ACLs ohne ALT bleiben unverändert.
 
+`add` und `replace` ändern per Default nur **Container**, also alles ab der
+zweiten Ebene unter `--base-dir`. Die Accounts (erste Ebene) bleiben
+unverändert, auch wenn ALT dort steht. Mit `--accounts` werden sie
+mitmigriert. Ohne `--accounts` bekommt NEU in Containern ohne eigene ACL
+nichts, denn sie erben vom Account, und dort steht weiter nur ALT. `remove`
+und `restore` kennen die Option nicht: `remove` ändert immer alle Ebenen,
+`restore` genau die Pfade aus dem Backup.
+
 ```bash
 # Migration: @newapp bekommt überall dieselben Rechte wie @client3
 hdfs-acl add @client3 @newapp            # Plan ansehen
 hdfs-acl add @client3 @newapp --apply
 hdfs-acl add @client3 @newapp --generate add-newapp.sh   # oder: Skript statt schreiben
+hdfs-acl add @client3 @newapp --accounts --apply         # Accounts mitmigrieren
 ```
 
 - Ist `@client3` Besitzer, bleibt es Besitzer, denn eine ACL hat nur
@@ -366,7 +375,8 @@ hdfs-acl replace @client3 @newapp --apply  # Phase 2: @newapp ersetzt @client3, 
 
 Statt `replace` geht in Phase 2 auch `remove @client3 --new-owner @newapp`.
 Das Ergebnis hat dieselben Rechte, nur die Reihenfolge der Einträge kann
-abweichen.
+abweichen. Das gilt nur, wenn beide Phasen mit `--accounts` liefen: `remove`
+nimmt `@client3` auch aus den Accounts.
 
 Wo `@client3` Besitzer war, bleibt nach Phase 2 der Eintrag aus Phase 1
 neben dem neuen Besitzer stehen: Aus `@client3|@test1=1,@test2=2` wird
@@ -573,6 +583,7 @@ clientid vollständig, auch als Besitzer.
 ./migrate.sh                     # @client3 -> @newapp in zwei Phasen (~4,5 min)
 ./migrate.sh @client3 @client4   # NEU hat schon Rechte: Bits beider
 ./migrate.sh --direct            # nur replace, ohne Phase 1
+./migrate.sh --accounts          # Accounts mitmigrieren (add/replace --accounts)
 ./migrate.sh --keep              # Container und Arbeitsordner behalten
 ```
 
@@ -600,6 +611,9 @@ Ablauf:
    - War ALT Besitzer, ist jetzt NEU Besitzer, sonst bleibt der Besitzer.
      NEU steht höchstens einmal als Eintrag da.
    - ACLs ohne ALT sind Wort für Wort unverändert.
+   Ohne `--accounts` gelten Phase 1 und 2 nur für Container, die Accounts
+   müssen in beiden Phasen Wort für Wort unverändert bleiben
+   (`migrate_check.py` ohne `--accounts`).
 5. Beide Backups rückwärts mit `restore` zurückspielen. Danach müssen Rechte
    und ACLs genau den Testdaten entsprechen (`--stage restored`).
 

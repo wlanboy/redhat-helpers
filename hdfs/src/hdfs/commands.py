@@ -50,6 +50,20 @@ def owner_id(value: str) -> str:
     return client_id(value)
 
 
+def migration_scope(args: argparse.Namespace, nodes: dict) -> dict:
+    """Die Pfade, die add/replace anfassen dürfen.
+
+    Default nur Container (zweite Ebene unter --base-dir und tiefer), mit
+    --accounts auch die Accounts (erste Ebene). nodes selbst bleibt
+    vollständig, damit die DB weiter alle Pfade enthält.
+    """
+    if args.accounts:
+        return nodes
+    prefix = base_dir(args.base_dir) + "/"
+    return {path: raw for path, raw in nodes.items()
+            if path.startswith(prefix) and "/" in path[len(prefix):]}
+
+
 def refresh(args: argparse.Namespace, hdfs: Hdfs) -> tuple:
     """Stand einlesen und die DB neu schreiben; liefert ({pfad: roh_acl oder None}, quelle).
 
@@ -275,17 +289,21 @@ def cmd_export(args: argparse.Namespace) -> int:
 # --- ändernde Kommandos -------------------------------------------------------
 
 
+def scope_note(args: argparse.Namespace) -> str:
+    return "" if args.accounts else " eines Containers (Accounts mit --accounts)"
+
+
 def cmd_add(args: argparse.Namespace) -> int:
     source, new = client_id(args.source), client_id(args.new)
     if source == new:
         raise UsageError("QUELLE und NEU sind gleich.")
     hdfs = Hdfs(args.parallel, args.hadoop_version)
     nodes, origin = refresh(args, hdfs)
-    changes, _ = plan_add(nodes, source, new)
+    changes, _ = plan_add(migration_scope(args, nodes), source, new)
     nodes = recheck(args, hdfs, nodes, [c.path for c in changes])
-    changes, found = plan_add(nodes, source, new)
+    changes, found = plan_add(migration_scope(args, nodes), source, new)
     if not found:
-        print(f"{source} steht in keiner ACL.")
+        print(f"{source} steht in keiner ACL{scope_note(args)}.")
         return 0
     return execute(args, hdfs, f"add-{new[1:]}", changes, nodes, origin)
 
@@ -296,10 +314,11 @@ def cmd_replace(args: argparse.Namespace) -> int:
         raise UsageError("ALT und NEU sind gleich.")
     hdfs = Hdfs(args.parallel, args.hadoop_version)
     nodes, origin = refresh(args, hdfs)
-    nodes = recheck(args, hdfs, nodes, [c.path for c in plan_replace(nodes, old, new)])
-    changes = plan_replace(nodes, old, new)
+    nodes = recheck(args, hdfs, nodes,
+                    [c.path for c in plan_replace(migration_scope(args, nodes), old, new)])
+    changes = plan_replace(migration_scope(args, nodes), old, new)
     if not changes:
-        print(f"{old} steht in keiner ACL.")
+        print(f"{old} steht in keiner ACL{scope_note(args)}.")
         return 0
     return execute(args, hdfs, f"replace-{old[1:]}-{new[1:]}", changes, nodes, origin)
 

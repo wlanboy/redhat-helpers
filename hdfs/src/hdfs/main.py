@@ -13,8 +13,9 @@ Kommandos:
   count               Anzahl der Einträge in der DB (Pfade, ACLs, Rechte, clientids)
   show PFAD           ACL eines Pfads und die Rechte daraus
   export              Rechte je ACL als CSV (Format wie testdata/expected.csv)
-  add QUELLE NEU      NEU überall mit den Rechten von QUELLE ergänzen (Migration)
-  replace ALT NEU     ALT überall durch NEU ersetzen, auch als Besitzer
+  add QUELLE NEU      NEU mit den Rechten von QUELLE ergänzen (Migration)
+  replace ALT NEU     ALT durch NEU ersetzen, auch als Besitzer
+                      (add/replace: nur Container, mit --accounts auch Accounts)
   remove CLIENTID     clientid aus allen ACLs entfernen
   restore BACKUP      Änderungen aus einer Backup-Datei zurückdrehen
 
@@ -91,6 +92,11 @@ def build_parser() -> argparse.ArgumentParser:
                            help="Hadoop-Client unter $HADOOP_REPO/downloads/hadoop-<version>, "
                                 "wenn HADOOP_HOME nicht gesetzt ist (Default: $HADOOP_VERSION oder 3.4.2)")
 
+    scope_opts = argparse.ArgumentParser(add_help=False)
+    scope_opts.add_argument("--accounts", action="store_true",
+                            help="auch die Accounts (erste Ebene unter --base-dir) migrieren; "
+                                 "ohne nur die Container darunter")
+
     write_opts = argparse.ArgumentParser(add_help=False)
     write_mode = write_opts.add_mutually_exclusive_group()
     write_mode.add_argument("--apply", action="store_true", help="Änderungen wirklich schreiben")
@@ -131,13 +137,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("-o", "--output", help="Datei statt stdout")
     p.set_defaults(func=cmd_export)
 
-    p = sub.add_parser("add", parents=[db_opts, hdfs_opts, write_opts],
+    p = sub.add_parser("add", parents=[db_opts, hdfs_opts, scope_opts, write_opts],
                        help="clientid ergänzen (Migration)")
     p.add_argument("source", metavar="QUELLE", help="vorhandene clientid")
     p.add_argument("new", metavar="NEU", help="clientid, die dieselben Rechte bekommt")
     p.set_defaults(func=cmd_add)
 
-    p = sub.add_parser("replace", parents=[db_opts, hdfs_opts, write_opts],
+    p = sub.add_parser("replace", parents=[db_opts, hdfs_opts, scope_opts, write_opts],
                        help="clientid ersetzen, auch als Besitzer")
     p.add_argument("old", metavar="ALT", help="clientid, die verschwindet")
     p.add_argument("new", metavar="NEU", help="clientid, die ihre Stelle einnimmt")
