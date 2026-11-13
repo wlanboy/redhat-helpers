@@ -15,7 +15,8 @@ Kommandos:
   export              Rechte je ACL als CSV (Format wie testdata/expected.csv)
   add QUELLE NEU      NEU mit den Rechten von QUELLE ergänzen (Migration)
   replace ALT NEU     ALT durch NEU ersetzen, auch als Besitzer
-                      (add/replace: nur Container, mit --accounts auch Accounts)
+                      (add/replace: nur Container, mit --accounts auch Accounts,
+                      mit --account NAME nur unter diesem Account)
   remove CLIENTID     clientid aus allen ACLs entfernen
   restore BACKUP      Änderungen aus einer Backup-Datei zurückdrehen
 
@@ -96,6 +97,9 @@ def build_parser() -> argparse.ArgumentParser:
     scope_opts.add_argument("--accounts", action="store_true",
                             help="auch die Accounts (erste Ebene unter --base-dir) migrieren; "
                                  "ohne nur die Container darunter")
+    scope_opts.add_argument("--account", action="append", metavar="ACCOUNT",
+                            help="nur diesen Account: Name (account3) oder Pfad (/fs/account3); "
+                                 "mehrfach angeben für mehrere")
 
     write_opts = argparse.ArgumentParser(add_help=False)
     write_mode = write_opts.add_mutually_exclusive_group()

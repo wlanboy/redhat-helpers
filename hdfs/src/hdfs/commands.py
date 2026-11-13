@@ -50,18 +50,46 @@ def owner_id(value: str) -> str:
     return client_id(value)
 
 
+def selected_accounts(args: argparse.Namespace) -> set | None:
+    """--account als volle Pfade (Name oder Pfad erlaubt), None = alle Accounts."""
+    if not args.account:
+        return None
+    base = base_dir(args.base_dir)
+    selected = set()
+    for value in args.account:
+        path = value.rstrip("/") if value.startswith("/") else f"{base}/{value.strip('/')}"
+        rest = path[len(base) + 1:] if path.startswith(base + "/") else ""
+        if not rest or "/" in rest:
+            raise UsageError(f"--account {value}: kein Account direkt unter {base}.")
+        selected.add(path)
+    return selected
+
+
 def migration_scope(args: argparse.Namespace, nodes: dict) -> dict:
     """Die Pfade, die add/replace anfassen dürfen.
 
     Default nur Container (zweite Ebene unter --base-dir und tiefer), mit
-    --accounts auch die Accounts (erste Ebene). nodes selbst bleibt
-    vollständig, damit die DB weiter alle Pfade enthält.
+    --accounts auch die Accounts (erste Ebene). --account schränkt auf
+    einzelne Accounts ein. nodes selbst bleibt vollständig, damit die DB
+    weiter alle Pfade enthält.
     """
-    if args.accounts:
-        return nodes
     prefix = base_dir(args.base_dir) + "/"
-    return {path: raw for path, raw in nodes.items()
-            if path.startswith(prefix) and "/" in path[len(prefix):]}
+    selected = selected_accounts(args)
+    if selected is not None:
+        missing = sorted(selected - nodes.keys(), key=natural_key)
+        if missing:
+            raise UsageError(f"Account nicht gefunden: {', '.join(missing)}")
+    scope = {}
+    for path, raw in nodes.items():
+        if not path.startswith(prefix):
+            continue
+        account, _, rest = path[len(prefix):].partition("/")
+        if not rest and not args.accounts:
+            continue
+        if selected is not None and prefix + account not in selected:
+            continue
+        scope[path] = raw
+    return scope
 
 
 def refresh(args: argparse.Namespace, hdfs: Hdfs) -> tuple:
@@ -290,7 +318,10 @@ def cmd_export(args: argparse.Namespace) -> int:
 
 
 def scope_note(args: argparse.Namespace) -> str:
-    return "" if args.accounts else " eines Containers (Accounts mit --accounts)"
+    note = "" if args.accounts else " eines Containers (Accounts mit --accounts)"
+    if args.account:
+        note += f" unter {', '.join(args.account)}"
+    return note
 
 
 def cmd_add(args: argparse.Namespace) -> int:

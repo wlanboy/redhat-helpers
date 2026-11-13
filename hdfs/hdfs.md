@@ -308,12 +308,19 @@ nichts, denn sie erben vom Account, und dort steht weiter nur ALT. `remove`
 und `restore` kennen die Option nicht: `remove` ändert immer alle Ebenen,
 `restore` genau die Pfade aus dem Backup.
 
+`--account NAME` beschränkt `add` und `replace` auf einen Account, als Name
+(`account3`) oder Pfad (`/fs/account3`). Mehrfach angegeben gilt es für
+mehrere Accounts. Der Account selbst wird auch dann nur mit `--accounts`
+geändert, sonst nur seine Container. Einen unbekannten Account oder einen
+Pfad, der nicht direkt unter `--base-dir` liegt, lehnt das Tool ab.
+
 ```bash
 # Migration: @newapp bekommt überall dieselben Rechte wie @client3
 hdfs-acl add @client3 @newapp            # Plan ansehen
 hdfs-acl add @client3 @newapp --apply
 hdfs-acl add @client3 @newapp --generate add-newapp.sh   # oder: Skript statt schreiben
 hdfs-acl add @client3 @newapp --accounts --apply         # Accounts mitmigrieren
+hdfs-acl add @client3 @newapp --account account3 --apply # nur Container von account3
 ```
 
 - Ist `@client3` Besitzer, bleibt es Besitzer, denn eine ACL hat nur

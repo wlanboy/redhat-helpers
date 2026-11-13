@@ -26,6 +26,13 @@ NODES = {
     "/fs/account2": "@o|@x=1",
 }
 
+# zweiter Account mit @client3, für --account
+NODES_TWO = {
+    **NODES,
+    "/fs/account2": "@client3|@x=1",
+    "/fs/account2/container1": "@o|@client3=3",
+}
+
 
 class FakeHdfs:
     def __init__(self, nodes: dict):
@@ -101,6 +108,36 @@ class CommandTest(unittest.TestCase):
         self.assertEqual(self.hdfs.nodes["/fs/account1"], NODES["/fs/account1"])
         self.assertEqual(self.hdfs.nodes["/fs/account1/container2"],
                          "@o|@newapp=1,.cn=ops,ou=groups,dc=firma=3")
+
+    def test_single_account(self):
+        self.hdfs = FakeHdfs(NODES_TWO)
+        rc, out, _ = self.run_main("replace", "@client3", "@newapp", "--live", "--apply",
+                                   "--account", "account2")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.hdfs.nodes["/fs/account2/container1"], "@o|@newapp=3")
+        # Account selbst nur mit --accounts, account1 gar nicht
+        for path in ("/fs/account2", "/fs/account1", "/fs/account1/container2"):
+            self.assertEqual(self.hdfs.nodes[path], NODES_TWO[path], path)
+
+    def test_single_account_with_account_acl(self):
+        self.hdfs = FakeHdfs(NODES_TWO)
+        rc, out, _ = self.run_main("add", "@client3", "@newapp", "--live", "--apply",
+                                   "--accounts", "--account", "/fs/account2/")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.hdfs.nodes["/fs/account2"], "@client3|@x=1,@newapp=19")
+        self.assertEqual(self.hdfs.nodes["/fs/account2/container1"], "@o|@client3=3,@newapp=3")
+        self.assertEqual(self.hdfs.nodes["/fs/account1"], NODES_TWO["/fs/account1"])
+
+    def test_account_errors(self):
+        rc, _, err = self.run_main("add", "@client3", "@newapp", "--live", "--account", "account9")
+        self.assertEqual(rc, 1)
+        self.assertIn("Account nicht gefunden: /fs/account9", err)
+        rc, _, err = self.run_main("add", "@client3", "@newapp", "--live",
+                                   "--account", "account1/container2")
+        self.assertEqual(rc, 1)
+        self.assertIn("kein Account direkt unter /fs", err)
+        rc, out, _ = self.run_main("add", "@client3", "@newapp", "--live", "--account", "account2")
+        self.assertIn("steht in keiner ACL eines Containers (Accounts mit --accounts) unter account2", out)
 
     def test_only_in_account(self):
         # @test1 steht nur in einer Account-ACL
