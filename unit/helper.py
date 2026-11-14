@@ -15,7 +15,7 @@ from typing import Dict, List, NoReturn
 
 
 def error(message: str) -> None:
-    print("Fehler: {0}".format(message), file=sys.stderr)
+    print(f"Fehler: {message}", file=sys.stderr)
 
 
 def die(message: str, code: int = 1) -> NoReturn:
@@ -41,7 +41,7 @@ def list_units(die_code: int = 1) -> List[Dict[str, str]]:
     except FileNotFoundError:
         die("systemctl wurde nicht gefunden.", code=die_code)
     except subprocess.CalledProcessError as exc:
-        die("Konnte User Units nicht auflisten ({0}).".format(exc), code=die_code)
+        die(f"Konnte User Units nicht auflisten ({exc}).", code=die_code)
 
     units = []
     for line in proc.stdout.splitlines():
@@ -73,6 +73,6 @@ def run_systemctl(args: List[str]) -> bool:
         error("systemctl wurde nicht gefunden.")
         return False
     if result.returncode != 0:
-        error("systemctl {0} fehlgeschlagen.".format(" ".join(args)))
+        error("systemctl {} fehlgeschlagen.".format(" ".join(args)))
         return False
     return True

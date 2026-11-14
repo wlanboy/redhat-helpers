@@ -18,9 +18,10 @@ Java- (JAR) oder Python-Anwendung:
 Kompatibel zu Python 3.9 (kein match-Statement, keine X | Y Type-Hints).
 """
 
+import shlex
 import sys
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional, Sequence
 
 from envstore import add_entry, get_version, load_environments, save_environments
 from helper import die, error, run_systemctl
@@ -190,21 +191,67 @@ def ask_unit_name(default: str) -> str:
         error("Ungueltiger Unit-Name '{0}'. {1}".format(name, UNIT_NAME_RE_MSG))
 
 
+def escape_specifiers(value: str) -> str:
+    """Escaped '%', damit systemd es nicht als Specifier (z.B. %h, %d)
+    ersetzt."""
+    return value.replace("%", "%%")
+
+
+# Zeichen, bei denen systemd ein Argument ohne Anfuehrungszeichen anders
+# zerlegt oder interpretiert als gemeint.
+_QUOTE_TRIGGERS = frozenset("\"'\\;")
+
+
+def quote_exec_arg(arg: str, force: bool = False) -> str:
+    """Bereitet ein einzelnes Argument fuer ExecStart= auf.
+
+    '%' wird immer als '%%' escaped. Enthaelt das Argument Leerraum,
+    Anfuehrungszeichen, Backslash oder ';' (oder ist force gesetzt), wird
+    es in doppelte Anfuehrungszeichen gesetzt; '\\' und '"' werden darin
+    per Backslash escaped. '$' bleibt unveraendert, damit Variablen aus
+    einer EnvironmentFile weiterhin per ${VAR} nutzbar sind."""
+    needs_quotes = (
+        force
+        or not arg
+        or any(c.isspace() or c in _QUOTE_TRIGGERS for c in arg)
+    )
+    escaped = escape_specifiers(arg)
+    if not needs_quotes:
+        return escaped
+    escaped = escaped.replace("\\", "\\\\").replace('"', '\\"')
+    return '"{0}"'.format(escaped)
+
+
+def split_params(raw: str) -> List[str]:
+    """Zerlegt eingegebene Parameter wie eine Shell (Anfuehrungszeichen
+    halten Argumente mit Leerzeichen zusammen). Wirft ValueError bei
+    unvollstaendigen Anfuehrungszeichen."""
+    return shlex.split(raw)
+
+
+def ask_params(prompt: str) -> List[str]:
+    while True:
+        raw = ask(prompt)
+        try:
+            return split_params(raw)
+        except ValueError as exc:
+            error("Parameter lassen sich nicht zerlegen ({0}). "
+                  "Anfuehrungszeichen pruefen.".format(exc))
+
+
 def build_exec_start(
     interpreter: str,
-    interpreter_params: str,
+    interpreter_args: Sequence[str],
     target: Path,
-    app_params: str,
+    app_args: Sequence[str],
     is_jar: bool,
 ) -> str:
-    parts = [interpreter]
-    if interpreter_params:
-        parts.append(interpreter_params)
+    parts = [quote_exec_arg(interpreter, force=True)]
+    parts.extend(quote_exec_arg(arg) for arg in interpreter_args)
     if is_jar:
         parts.append("-jar")
-    parts.append(str(target))
-    if app_params:
-        parts.append(app_params)
+    parts.append(quote_exec_arg(str(target), force=True))
+    parts.extend(quote_exec_arg(arg) for arg in app_args)
     return " ".join(parts)
 
 
@@ -222,15 +269,15 @@ def main() -> None:
     if is_java:
         interpreter = ask_environment("Java", "java", "java")
         target = ask_jar_path("Pfad zur JAR-Datei oder zum Ordner")
-        interpreter_params = ask(
+        interpreter_args = ask_params(
             "Zusaetzliche JVM-Parameter (z.B. -Xmx512m -Dspring.profiles.active=prod)"
         )
     else:
         interpreter = ask_environment("Python", "python", "python3")
         target = ask_existing_path("Pfad zum Python-Skript")
-        interpreter_params = ask("Zusaetzliche Interpreter-Parameter (z.B. -O)")
+        interpreter_args = ask_params("Zusaetzliche Interpreter-Parameter (z.B. -O)")
 
-    app_params = ask("Programm-Argumente (Argumente fuer die Anwendung selbst)")
+    app_args = ask_params("Programm-Argumente (Argumente fuer die Anwendung selbst)")
 
     env_file = ""
     if ask_yes_no("Environment-File verwenden (EnvironmentFile=)?", default=False):
@@ -260,21 +307,21 @@ def main() -> None:
     description = ask("Beschreibung", default=default_description, required=True)
 
     exec_start = build_exec_start(
-        interpreter, interpreter_params, target, app_params, is_java
+        interpreter, interpreter_args, target, app_args, is_java
     )
 
     lines = [
         "[Unit]",
-        "Description={0}".format(description),
+        "Description={0}".format(escape_specifiers(description)),
         "After=network-online.target",
         "Wants=network-online.target",
         "",
         "[Service]",
         "Type=simple",
-        "WorkingDirectory={0}".format(workdir_path.resolve()),
+        "WorkingDirectory={0}".format(escape_specifiers(str(workdir_path.resolve()))),
     ]
     if env_file:
-        lines.append("EnvironmentFile={0}".format(env_file))
+        lines.append("EnvironmentFile={0}".format(escape_specifiers(env_file)))
     lines.extend(
         [
             "ExecStart={0}".format(exec_start),

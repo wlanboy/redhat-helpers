@@ -9,8 +9,9 @@ allen Units aus.
 
 'delete' stoppt und deaktiviert die Unit, entfernt die .service-Datei
 aus ~/.config/systemd/user/ und fuehrt anschliessend
-"systemctl --user daemon-reload" aus. Vor dem Loeschen wird immer
-nochmal explizit nachgefragt.
+"systemctl --user daemon-reload" aus. Schlaegt stop oder disable fehl,
+bleibt die Datei erhalten und die Unit zaehlt als Fehler. Vor dem
+Loeschen wird immer nochmal explizit nachgefragt.
 
 Optional kann ein Filter-Text angegeben werden, um nur Units
 anzuzeigen, deren Name diesen Text enthaelt (Gross-/Kleinschreibung
@@ -31,12 +32,12 @@ Kompatibel zu Python 3.9.
 """
 
 import argparse
-import subprocess
 import sys
 from pathlib import Path
 from typing import List, Optional
 
-from helper import die, error, list_units as _list_units
+from helper import die, error, run_systemctl
+from helper import list_units as _list_units
 
 ACTIONS = ("start", "stop", "status", "restart", "enable", "disable", "delete")
 UNIT_DIR = Path.home() / ".config" / "systemd" / "user"
@@ -50,7 +51,7 @@ def print_units(units: List[str]) -> None:
     print()
     print("Verfuegbare User Units:")
     for i, unit in enumerate(units, start=1):
-        print("  [{0:2d}] {1}".format(i, unit))
+        print(f"  [{i:2d}] {unit}")
     print()
 
 
@@ -62,11 +63,11 @@ def parse_selection(raw: str, count: int) -> Optional[List[int]]:
     indices = []
     for token in raw.replace(",", " ").split():
         if not token.isdigit():
-            error("Ungueltige Nummer '{0}'.".format(token))
+            error(f"Ungueltige Nummer '{token}'.")
             return None
         num = int(token)
         if not (1 <= num <= count):
-            error("Nummer '{0}' liegt ausserhalb des gueltigen Bereichs.".format(num))
+            error(f"Nummer '{num}' liegt ausserhalb des gueltigen Bereichs.")
             return None
         if num not in indices:
             indices.append(num)
@@ -78,42 +79,41 @@ def parse_selection(raw: str, count: int) -> Optional[List[int]]:
 
 
 def delete_unit(unit: str) -> bool:
-    print("-> delete: {0}".format(unit))
-    subprocess.run(["systemctl", "--user", "stop", unit])
-    subprocess.run(["systemctl", "--user", "disable", unit])
+    """Stoppt und deaktiviert die Unit, loescht die Unit-Datei und laedt
+    systemd neu. Schlaegt stop oder disable fehl, bleibt die Datei
+    erhalten, damit keine laufende Unit ohne Datei oder verwaiste
+    Symlinks in *.wants/ zurueckbleiben."""
+    print(f"-> delete: {unit}")
+    for step in ("stop", "disable"):
+        if not run_systemctl([step, unit]):
+            error(f"{step} fehlgeschlagen, '{unit}' wird nicht geloescht.")
+            return False
 
     unit_path = UNIT_DIR / unit
     if not unit_path.is_file():
         error(
-            "Unit-Datei '{0}' nicht gefunden, ueberspringe Loeschen der Datei.".format(
-                unit_path
-            )
+            f"Unit-Datei '{unit_path}' nicht gefunden, ueberspringe Loeschen der Datei."
         )
     else:
         try:
             unit_path.unlink()
-            print("Geloescht: {0}".format(unit_path))
+            print(f"Geloescht: {unit_path}")
         except OSError as exc:
-            error("Konnte '{0}' nicht loeschen ({1}).".format(unit_path, exc))
+            error(f"Konnte '{unit_path}' nicht loeschen ({exc}).")
             return False
 
-    subprocess.run(["systemctl", "--user", "daemon-reload"])
-    return True
+    return run_systemctl(["daemon-reload"])
 
 
 def run_action(action: str, unit: str) -> bool:
     if action == "delete":
         return delete_unit(unit)
 
-    print("-> {0}: {1}".format(action, unit))
-    args = ["systemctl", "--user", action, unit]
+    print(f"-> {action}: {unit}")
+    args = [action, unit]
     if action == "status":
         args.append("--no-pager")
-    result = subprocess.run(args)
-    if result.returncode != 0:
-        error("{0} fehlgeschlagen fuer {1}.".format(action, unit))
-        return False
-    return True
+    return run_systemctl(args)
 
 
 def main() -> None:
@@ -141,7 +141,7 @@ def main() -> None:
     if args.filter:
         units = [u for u in units if args.filter.lower() in u.lower()]
         if not units:
-            print("Keine User Units gefunden, die '{0}' enthalten.".format(args.filter))
+            print(f"Keine User Units gefunden, die '{args.filter}' enthalten.")
             sys.exit(0)
 
     print_units(units)
@@ -162,7 +162,7 @@ def main() -> None:
         print()
         print("Folgende Units werden gestoppt, deaktiviert und geloescht:")
         for unit in selected:
-            print("  - {0}".format(unit))
+            print(f"  - {unit}")
         confirm = input("Wirklich loeschen? [j/N]: ").strip().lower()
         if confirm not in ("j", "ja", "y", "yes"):
             print("Abgebrochen.")
@@ -176,7 +176,7 @@ def main() -> None:
 
     print()
     if failures:
-        print("Fertig mit {0} Fehler(n).".format(failures))
+        print(f"Fertig mit {failures} Fehler(n).")
         sys.exit(1)
     print("Fertig.")
 

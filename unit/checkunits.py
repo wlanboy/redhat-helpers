@@ -48,18 +48,18 @@ def journal_lines(unit: str, priority: str, since: str, limit: int) -> List[str]
 
 def print_section(title: str, entries: List[Dict[str, Any]]) -> None:
     print()
-    print("== {0} ({1}) ==".format(title, len(entries)))
+    print(f"== {title} ({len(entries)}) ==")
     if not entries:
         print("  (keine)")
         return
     for entry in entries:
         print(
-            "  {0}  (active={1}, sub={2})".format(
+            "  {}  (active={}, sub={})".format(
                 entry["name"], entry["active"], entry["sub"]
             )
         )
         for line in entry["lines"]:
-            print("      {0}".format(line))
+            print(f"      {line}")
 
 
 def main() -> None:
@@ -99,13 +99,9 @@ def main() -> None:
         if warn_lines:
             warning_units.append({**unit, "lines": warn_lines})
 
-    print("Geprueft: {0} Units, Zeitraum: {1}".format(len(units), args.since))
+    print(f"Geprueft: {len(units)} Units, Zeitraum: {args.since}")
     print(
-        "  OK: {0}   Warnungen: {1}   Fehler: {2}".format(
-            len(units) - len(failed_units) - len(warning_units),
-            len(warning_units),
-            len(failed_units),
-        )
+        f"  OK: {len(units) - len(failed_units) - len(warning_units)}   Warnungen: {len(warning_units)}   Fehler: {len(failed_units)}"
     )
 
     print_section("Fehler", failed_units)

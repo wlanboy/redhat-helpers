@@ -32,6 +32,14 @@ sudo). Kompatibel zu Python 3.9 (kein `match`-Statement, keine
   bietet an, `systemctl --user daemon-reload` sowie `enable --now`
   direkt auszuführen.
 
+  Parameter werden wie in der Shell eingegeben. Ein Wert mit Leerzeichen
+  gehört in Anführungszeichen, etwa `"-Dlogging.pattern=%d %msg"`.
+  Bei unvollständigen Anführungszeichen fragt der Generator erneut. In der
+  Unit stehen Pfade und Argumente mit Leerzeichen in doppelten
+  Anführungszeichen, `%` wird als `%%` geschrieben, damit systemd es nicht
+  als Specifier auflöst. `${VAR}` bleibt erhalten und greift auf Variablen
+  aus der `EnvironmentFile` zu.
+
 - **unithelper.py** – Zeigt alle systemd User Units durchnummeriert an
   und führt einen Befehl auf einer Nummer, mehreren Nummern (Komma-
   oder Leerzeichen-getrennt) oder allen Units aus:
@@ -39,7 +47,9 @@ sudo). Kompatibel zu Python 3.9 (kein `match`-Statement, keine
   - `enable`, `disable`
   - `delete` – stoppt und deaktiviert die Unit, entfernt die
     `.service`-Datei aus `~/.config/systemd/user/` und führt
-    `daemon-reload` aus; fragt vor dem Löschen nochmal explizit nach
+    `daemon-reload` aus; fragt vor dem Löschen nochmal explizit nach.
+    Schlägt `stop` oder `disable` fehl, bleibt die Datei liegen und die
+    Unit zählt als Fehler (Exit-Code 1)
 
   Optional kann ein Filter-Text als zweites Argument angegeben werden,
   um nur Units anzuzeigen, deren Name diesen Text enthält

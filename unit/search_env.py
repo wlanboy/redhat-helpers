@@ -98,7 +98,7 @@ def find_python_candidates() -> List[Path]:
             candidates.append(found)
 
     for bindir in ("/usr/bin", "/usr/local/bin"):
-        candidates.extend(glob.glob("{0}/python3*".format(bindir)))
+        candidates.extend(glob.glob(f"{bindir}/python3*"))
 
     candidates.extend(glob.glob("/opt/*/bin/python3*"))
     candidates.extend(glob.glob(str(Path.home() / ".pyenv/versions/*/bin/python3*")))
@@ -117,13 +117,13 @@ def merge(customs: List[dict], detected: List[dict]) -> List[dict]:
 
 def print_summary(label: str, entries: List[dict]) -> None:
     print()
-    print("{0}:".format(label))
+    print(f"{label}:")
     if not entries:
         print("  (nichts gefunden)")
         return
     for i, entry in enumerate(entries, start=1):
         tag = "custom" if entry.get("source") == "custom" else "gefunden"
-        print("  [{0}] {1}  ({2}, {3})".format(i, entry["path"], entry["version"], tag))
+        print("  [{}] {}  ({}, {})".format(i, entry["path"], entry["version"], tag))
 
 
 def main() -> None:
@@ -152,7 +152,7 @@ def main() -> None:
     print_summary("Python-Versionen", store["python"])
 
     print()
-    print("Gespeichert nach: {0}".format(ENV_FILE))
+    print(f"Gespeichert nach: {ENV_FILE}")
 
 
 if __name__ == "__main__":
