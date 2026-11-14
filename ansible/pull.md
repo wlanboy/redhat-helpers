@@ -45,7 +45,9 @@ Darum braucht es einen kleinen Wrapper davor:
 1. `git ls-remote` listet die Tags bzw. Branches im Repo, ohne zu klonen.
 2. Daraus wird per Versionssortierung (`sort -V`) der neueste gewählt.
 3. Ref und Commit-SHA werden mit dem zuletzt ausgerollten Stand verglichen.
-4. Nur bei einer Änderung läuft `ansible-pull -C <ref> <playbook>`.
+4. Nur bei einer Änderung läuft `ansible-pull -C <sha> --verify-commit <playbook>`.
+   Ausgecheckt wird genau der Commit aus Schritt 1, nicht der Ref-Name, und
+   seine Signatur wird vor dem Playbook geprüft.
 5. Nach erfolgreichem Lauf wird der neue Stand gespeichert.
 
 Ein systemd Timer ruft den Wrapper regelmäßig auf.
@@ -96,8 +98,9 @@ Konfiguriert wird es über Umgebungsvariablen:
 | `REF_EXCLUDE` | leer | Regex für Refs, die ignoriert werden, z.B. `-(rc\|beta)[0-9]*$` |
 | `PLAYBOOK` | (Pflicht) | Playbook relativ zum Repo-Root |
 | `STATE_NAME` | `$MODE` | Name der State-Datei, je Instanz eindeutig |
-| `PULL_URL` | `$REPO_URL` | Repo, das ansible-pull klont (siehe Abschnitt 6) |
-| `PULL_CHECKOUT` | gefundener Ref | Checkout für ansible-pull (siehe Abschnitt 6) |
+| `PULL_URL` | `$REPO_URL` | Repo, das ansible-pull klont (siehe Abschnitt 7) |
+| `PULL_CHECKOUT` | SHA des gefundenen Refs | Checkout für ansible-pull (siehe Abschnitt 7) |
+| `VERIFY_COMMIT` | `yes` | `yes` prüft die Signatur des ausgecheckten Commits (siehe Abschnitt 4), `no` schaltet das ab |
 | `ANSIBLE_PULL_ARGS` | leer | Weitere Optionen, z.B. `--vault-password-file ~/.vault-pass` |
 
 Der zuletzt ausgerollte Stand steht in
@@ -105,6 +108,13 @@ Der zuletzt ausgerollte Stand steht in
 die SHA verglichen wird, löst ein neuer Commit auf dem aktuellen
 Release-Branch ebenfalls einen Lauf aus. Ein Tag, der nachträglich auf einen
 anderen Commit verschoben wird, auch.
+
+ansible-pull bekommt die SHA aus `git ls-remote` als `--checkout`, nicht den
+Tag- oder Branch-Namen. Wird der Tag verschoben, während der Lauf schon
+begonnen hat, läuft trotzdem der gemeldete Commit, und genau dieser landet im
+State. Der verschobene Tag fällt erst beim nächsten Timer-Lauf auf. Weil sich
+ein einzelner Commit nicht flach klonen lässt, setzt das Skript dabei
+`--full`.
 
 An das Playbook übergibt das Skript drei Variablen:
 
@@ -123,9 +133,98 @@ MODE=tag REF_PATTERN='v*' PLAYBOOK=playbooks/deploy-release.yml \
 ~/bin/ansible-pull-ref.sh
 ```
 
+Ohne hinterlegten Signaturschlüssel bricht dieser Aufruf ab, siehe
+Abschnitt 4. Für einen ersten Test ohne Schlüssel setzt man
+`VERIFY_COMMIT=no` davor.
+
 ---
 
-## 4. Playbooks im Repo
+## 4. Signaturen prüfen
+
+Ohne Signaturprüfung kann jeder, der einen Tag oder Branch ins Repo pushen
+darf, Code auf allen VMs ausführen, die den Timer nutzen. Mit
+`VERIFY_COMMIT=yes` (Default) ruft ansible-pull nach dem Checkout
+`git verify-commit` auf. Ist der Commit nicht von einem hinterlegten Schlüssel
+signiert, bricht es vor dem Playbook ab, und der State bleibt unverändert.
+
+Geprüft wird die Signatur des Commits, nicht die des Tags. Ein signierter Tag
+(`git tag -s`) auf einem unsignierten Commit reicht also nicht.
+
+### Signieren beim Release
+
+Wer Releases erstellt, signiert den Commit, auf den der Tag zeigt. Mit einem
+SSH-Schlüssel (Git ab 2.34):
+
+```bash
+git config gpg.format ssh
+git config user.signingkey ~/.ssh/release_signing.pub
+git commit -S --allow-empty -m "Release v1.4.0"
+git tag v1.4.0
+git push origin HEAD v1.4.0
+```
+
+Mit GPG entfällt `gpg.format ssh`, und `user.signingkey` bekommt die
+Key-ID. Merge-Commits aus der GitLab-Oberfläche tragen keine Signatur mit
+diesem Schlüssel. Deshalb erstellt man den Release-Commit wie oben lokal und
+setzt den Tag darauf.
+
+### Schlüssel auf die VM bringen
+
+Auf die VM kommt nur der öffentliche Schlüssel, und zwar nicht aus dem Repo,
+das der Timer liest. Sonst tauscht ein Angreifer mit Schreibrechten den
+Schlüssel im selben Commit gleich mit aus. Geeignete Wege sind Kickstart,
+Satellite, das Linux-Team oder einmalig von Hand. Sobald der erste Schlüssel
+liegt, darf ein signierter Stand ihn per Playbook gegen einen neuen
+austauschen.
+
+**SSH-Schlüssel.** Das ist der einfachere Weg, weil kein GPG-Keyring nötig
+ist. Als `svc-app`:
+
+```bash
+mkdir -p ~/.config/git
+cat > ~/.config/git/allowed_signers <<'EOF'
+release@example.com namespaces="git" ssh-ed25519 AAAAC3Nza... release-signing
+EOF
+chmod 0644 ~/.config/git/allowed_signers
+
+git config --global gpg.ssh.allowedSignersFile ~/.config/git/allowed_signers
+git config --global gpg.minTrustLevel fully
+```
+
+Jede Zeile in `allowed_signers` ist ein erlaubter Schlüssel. Die
+E-Mail-Adresse am Anfang ist nur ein Name für die Ausgabe. Neuere Git-Versionen
+lehnen Schlüssel, die nicht in der Datei stehen, von sich aus ab.
+`gpg.minTrustLevel fully` erzwingt das auch bei älteren.
+
+**GPG-Schlüssel.** Als `svc-app`:
+
+```bash
+gpg --import release-signing.asc
+fpr=$(gpg --show-keys --with-colons release-signing.asc | awk -F: '/^fpr/ {print $10; exit}')
+echo "$fpr:6:" | gpg --import-ownertrust
+
+git config --global gpg.minTrustLevel fully
+```
+
+Ohne `--import-ownertrust` gilt der Schlüssel als „unbekannte Gültigkeit“,
+und `gpg.minTrustLevel fully` lässt die Prüfung scheitern. Den Fingerprint
+gleicht man vorher mit der Person ab, die Releases signiert.
+
+Ob der Schlüssel richtig hinterlegt ist, zeigt `git verify-commit` im
+Workdir nach einem Lauf oder in einem eigenen Clone:
+
+```bash
+git -C ~/.cache/ansible-pull/release-tag verify-commit HEAD
+```
+
+Bei Erfolg meldet Git `Good "git" signature for release@example.com` (SSH)
+bzw. `Korrekte Signatur von "Release <release@example.com>" [ultimativ]`
+(GPG mit deutscher Locale). Schlägt die Prüfung im Timer fehl, steht
+im Journal `Failed to verify GPG signature of commit/tag "<sha>"`.
+
+---
+
+## 5. Playbooks im Repo
 
 Beispielstruktur:
 
@@ -161,14 +260,14 @@ app-deploy/
     # systemd --user daemon-reload, Unit neu starten
 ```
 
-Wichtig: ansible-pull checkt den gefundenen Tag bzw. Branch aus und nimmt
-das Playbook aus genau diesem Stand. Es muss also in jedem Release-Tag
+Wichtig: ansible-pull checkt den Commit des gefundenen Tags bzw. Branches
+aus und nimmt das Playbook aus genau diesem Stand. Es muss also in jedem Release-Tag
 vorhanden sein. Alte Tags ohne das Playbook schlagen fehl. Wer das nicht
-will, trennt Playbooks und Anwendung, siehe Abschnitt 6.
+will, trennt Playbooks und Anwendung, siehe Abschnitt 7.
 
 ---
 
-## 5. systemd User Units
+## 6. systemd User Units
 
 Eine Template-Unit für beide Fälle, die Instanz (`%i`) wählt die
 Konfigurationsdatei.
@@ -252,7 +351,7 @@ systemctl --user start ansible-pull@release-tag.service
 
 ---
 
-## 6. Variante: Playbooks in einem eigenen Repo
+## 7. Variante: Playbooks in einem eigenen Repo
 
 Oft liegt die Anwendung in einem Repo und die Deploy-Playbooks in einem
 anderen. Dann beobachtet der Wrapper das Anwendungs-Repo, klont aber das
@@ -275,9 +374,17 @@ Das Playbook holt dann das Artefakt passend zu `release_ref`, z.B.
 Vorteil: Ein Fix am Playbook wirkt auch für alte Releases, und der
 Anwendungs-Tag muss keine Ansible-Dateien enthalten.
 
+Für Checkout und Signatur gilt in dieser Variante etwas anderes. Mit
+`PULL_CHECKOUT` checkt ansible-pull den angegebenen Namen aus, hier also den
+jeweils neuesten Commit auf `main` im Deploy-Repo. `--verify-commit` prüft diesen Commit.
+Jeder Commit, der auf `main` landet, muss also signiert sein. Der Tag im
+Anwendungs-Repo wird nicht ausgecheckt und deshalb auch nicht geprüft. Das
+Playbook muss das Artefakt selbst prüfen, z.B. per Checksumme aus Nexus oder
+per Image-Digest statt Tag.
+
 ---
 
-## 7. Hinweise
+## 8. Hinweise
 
 - **Sortierung:** `sort -V` sortiert `v1.10.0` korrekt nach `v1.9.0` und
   `release/1.10` nach `release/1.9`. Gemischte Schemata (`v1.2` und

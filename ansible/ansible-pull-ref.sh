@@ -22,10 +22,19 @@ STATE_DIR="${STATE_DIR:-$HOME/.local/state/ansible-pull}"
 WORKDIR="${WORKDIR:-$HOME/.cache/ansible-pull/$STATE_NAME}"
 ANSIBLE_PULL_ARGS="${ANSIBLE_PULL_ARGS:-}"
 
+# Signatur des ausgecheckten Commits prüfen. Der Schlüssel muss in der
+# Git-Konfiguration des Users hinterlegt sein, siehe ansible/pull.md.
+VERIFY_COMMIT="${VERIFY_COMMIT:-yes}"                # yes | no
+
 case "$MODE" in
     tag)    ls_flag=--tags;  prefix=refs/tags/;  REF_PATTERN="${REF_PATTERN:-v*}" ;;
     branch) ls_flag=--heads; prefix=refs/heads/; REF_PATTERN="${REF_PATTERN:-release/*}" ;;
     *)      echo "MODE muss 'tag' oder 'branch' sein, nicht '$MODE'" >&2; exit 2 ;;
+esac
+
+case "$VERIFY_COMMIT" in
+    yes|no) ;;
+    *) echo "VERIFY_COMMIT muss 'yes' oder 'no' sein, nicht '$VERIFY_COMMIT'" >&2; exit 2 ;;
 esac
 
 mkdir -p "$STATE_DIR" "$(dirname "$WORKDIR")"
@@ -61,10 +70,25 @@ fi
 
 echo "Neuer Stand: $ref ($sha), vorher: ${last:-keiner}"
 
+# Liegen die Playbooks im beobachteten Repo, wird der per ls-remote
+# ermittelte Commit ausgecheckt und nicht der Ref-Name. Ein zwischendurch
+# verschobener Tag oder ein neuer Commit auf dem Branch ändert dann nichts
+# am Stand, der läuft und im State-File landet.
+pull_opts=()
+if [[ -n "$PULL_CHECKOUT" ]]; then
+    pull_opts+=(--checkout "$PULL_CHECKOUT")
+elif [[ "$PULL_URL" == "$REPO_URL" ]]; then
+    # Einen einzelnen Commit kann das git-Modul nicht flach klonen
+    pull_opts+=(--checkout "$sha" --full)
+else
+    pull_opts+=(--checkout "$ref")
+fi
+[[ "$VERIFY_COMMIT" == yes ]] && pull_opts+=(--verify-commit)
+
 # shellcheck disable=SC2086  # ANSIBLE_PULL_ARGS soll aufgeteilt werden
 ansible-pull \
     --url "$PULL_URL" \
-    --checkout "${PULL_CHECKOUT:-$ref}" \
+    "${pull_opts[@]}" \
     --directory "$WORKDIR" \
     --inventory localhost, \
     --clean \
