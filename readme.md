@@ -78,13 +78,22 @@ VMs verteilt. Siehe [valkeycluster/readme.md](valkeycluster/readme.md).
 
 - **install-kind.sh** – Richtet einen kind-Cluster (Kubernetes IN Docker)
   mit Podman als Runtime ein. Prüft Voraussetzungen (Podman, cgroup v2),
-  installiert kind/kubectl bei Bedarf (offline aus lokalem Binary oder per
-  Download) und erstellt optional den Cluster aus
-  `kind-cluster-config.yaml`. Muss als root ausgeführt werden.
+  installiert kind/kubectl bei Bedarf und erstellt optional den Cluster aus
+  `kind-cluster-config.yaml`. Fehlt kind, nimmt das Skript zuerst ein
+  lokales `kind-linux-<arch>` in diesem Ordner und installiert es nur, wenn
+  der Hash zu `kind.sha256` passt. Ohne lokales Binary lädt es kind und
+  kubectl herunter und prüft sie gegen die Prüfsummen des jeweiligen
+  Releases. Version und Download-Quelle lassen sich über `KIND_VERSION`,
+  `KUBECTL_VERSION`, `KIND_BASE_URL` und `KUBECTL_BASE_URL` ändern, etwa für
+  einen Nexus/Artifactory Raw-Proxy. Muss als root ausgeführt werden.
 - **kind-cluster-config.yaml** – Cluster-Konfiguration mit
   Registry-Mirror-Einträgen (Nexus/Artifactory) für Docker Hub,
   registry.k8s.io und Quay. Wird nicht generiert, sondern manuell gepflegt.
-- **kind-linux-amd64** – Lokales kind-Binary für die Offline-Installation.
+- **kind.sha256** – SHA-256-Hashes der offiziellen kind-Binaries
+  (amd64, arm64) für die Version in `KIND_VERSION`. Das Binary selbst liegt
+  nicht im Repo. Für eine Offline-Installation lädt man es von
+  `https://kind.sigs.k8s.io/dl/<version>/kind-linux-<arch>` und legt es in
+  diesen Ordner.
 
 ## Voraussetzungen
 
