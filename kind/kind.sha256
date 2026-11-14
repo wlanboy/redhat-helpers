@@ -1,0 +1,4 @@
+# kind v0.32.0 (muss zu KIND_VERSION in install-kind.sh passen)
+# Quelle: https://kind.sigs.k8s.io/dl/v0.32.0/kind-linux-<arch>.sha256sum
+50030de23cf40a18505f20426f6a8506bedf13c6e509244bd1fa9463721b0f54  kind-linux-amd64
+b92cd615e97585de8ddade28ed5cd7feb4248d717c233eea5b03c37298900f5d  kind-linux-arm64
