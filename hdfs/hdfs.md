@@ -124,13 +124,13 @@ uv run hdfs-acl <kommando> ...
 | Datei            | Inhalt                                                             |
 |------------------|--------------------------------------------------------------------|
 | `main.py`        | Einstieg: Argumente (argparse), Fehlerbehandlung                   |
-| `commands.py`    | ein `cmd_*` je Kommando, gemeinsamer Ablauf `execute()` fürs Ändern |
+| `commands.py`    | ein `cmd_*` je Kommando, gemeinsamer Ablauf `execute()` fürs Ändern, `cmd_plan` für den Trockenlauf |
 | `acl.py`         | ACL-Format parsen/prüfen (inkl. Gruppen-DN), Rechte je ACL         |
 | `permissions.py` | Rechte-Tabelle: Namen der Bits, Besitzer-/Verwaltungsrecht (JSON) |
 | `changes.py`     | `Change` und `plan_*`: was `add`/`replace`/`remove`/`restore` ändern |
 | `fsimage.py`     | XML von `hdfs oiv` als Stream lesen, Pfade zusammensetzen          |
 | `hdfs_client.py` | `hdfs oiv`, `hdfs dfs -getfattr/-setfattr` aufrufen, Java suchen   |
-| `store.py`       | SQLite-Schema, DB schreiben/öffnen, Backup-CSV                     |
+| `store.py`       | SQLite-Schema, DB schreiben/öffnen/lesen, Backup- und Plan-CSV     |
 | `output.py`      | Ausgabe als Tabelle, CSV oder JSON                                 |
 | `common.py`      | Fehlerklassen, Meldungen auf stderr, natürliche Sortierung         |
 
@@ -418,6 +418,38 @@ dem Backup entspricht. Pfade, die seitdem jemand anders geändert hat, werden
 Pfade, die schon den alten Wert haben, lässt `restore` stillschweigend aus.
 Ein zweites `restore` desselben Backups ist deshalb unschädlich, ebenso ein
 `restore` nach einem Teilfehler beim Schreiben.
+
+### Trockenlauf mit plan
+
+`plan add`, `plan replace` und `plan remove` nehmen dieselben Argumente wie
+`add`, `replace` und `remove` (inklusive `--accounts`, `--account`,
+`--permission`, `--new-owner`), arbeiten aber nur auf der DB. Sie lesen
+kein fsimage, fragen HDFS nicht und schreiben nichts nach HDFS. Wie der
+Dry-Run zeigen sie alt/neu je Pfad. Den Plan schreiben sie als
+`hdfs-acl-plan-<zeit>-<aktion>.csv` neben die DB, mit `-o DATEI` an eine
+andere Stelle. Der Basisordner kommt aus der DB, deshalb gibt es kein `--base-dir`.
+
+```bash
+hdfs-acl collect                                    # Stand einlesen
+hdfs-acl plan add @client3 @newapp --accounts       # Plan auf der DB, ohne HDFS
+hdfs-acl plan remove @client3 -o remove-client3.csv
+```
+
+Die CSV hat dasselbe Format wie die Backups (`path;old;new;empty`). Sie eignet
+sich für ein Change-Ticket oder einen Review vor dem Lauf, und `restore` kann
+sie direkt verwenden. Nach `add … --apply` dreht
+`restore hdfs-acl-plan-….csv --apply` die geplanten Pfade zurück.
+
+Der Plan ist so alt wie die DB (Zeitpunkt und Quelle stehen auf stderr und in
+der Zeile `Plan:`). Das echte Kommando liest danach neu ein und die
+betroffenen Pfade live nach. Weicht HDFS inzwischen ab, weicht auch dessen
+Backup vom Plan ab. Ein `diff` zwischen Plan und Backup zeigt das. `restore`
+mit dem Plan setzt nur Pfade zurück, die noch den geplanten neuen Wert haben,
+alle anderen meldet es als Konflikt.
+
+Die Exit-Codes entsprechen denen des echten Kommandos. `plan remove` endet
+mit 2, wenn es Pfade überspringt, an denen die clientid Besitzer ist. Ist nichts zu
+ändern, entsteht keine Datei.
 
 Gemeinsame Optionen: `--db` (`$HDFS_ACL_DB`, Default `./hdfs-acl.db`),
 `--base-dir` (`$BASE_DIR`), `--attr` (`$ACL_ATTR`), `--depth` (`$DEPTH`,

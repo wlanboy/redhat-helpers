@@ -123,36 +123,57 @@ def open_db(db: Path) -> sqlite3.Connection:
     return con
 
 
-def write_backup(db: Path, label: str, changes: list) -> Path:
-    """Schreibt die geplanten Changes als CSV (path;old;new;empty) neben die DB.
+def load_nodes(db: Path) -> tuple:
+    """Liest den Stand aus der DB: ({pfad: roh_acl oder None}, meta).
+
+    Für plan, das ohne HDFS auf dem Stand des letzten Einlesens plant.
+    """
+    con = open_db(db)
+    meta = dict(con.execute("SELECT key, value FROM meta"))
+    nodes = dict(con.execute("SELECT path, acl FROM node"))
+    con.close()
+    return nodes, meta
+
+
+def write_changes(file, changes: list) -> None:
+    """Schreibt Changes als CSV (path;old;new;empty) in eine offene Datei.
 
     Ein leeres Feld steht für "kein Attribut". Ein vorhandenes, aber leeres
     Attribut ("") nennt die Spalte empty ("old", "new" oder "old,new"), denn
-    in der CSV sähe es sonst genauso aus. read_backup() liest die Datei für
-    restore wieder ein.
+    in der CSV sähe es sonst genauso aus. read_backup() liest das Format
+    für restore wieder ein.
+    """
+    # ';' als Trenner, weil die ACL-Werte selbst ',' und '|' enthalten
+    writer = csv.writer(file, delimiter=";", lineterminator="\n")
+    writer.writerow(["path", "old", "new", "empty"])
+    for change in changes:
+        empty = ",".join(name for name, value in (("old", change.old), ("new", change.new))
+                         if value == "")
+        writer.writerow([change.path, change.old or "", change.new or "", empty])
+
+
+def write_backup(db: Path, label: str, changes: list, kind: str = "backup") -> Path:
+    """Schreibt die geplanten Changes als hdfs-acl-<kind>-<zeit>-<label>.csv neben die DB.
+
+    kind ist "backup" (vor dem Schreiben) oder "plan" (Kommando plan); das
+    Format ist dasselbe (write_changes), restore nimmt beide.
     """
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     folder = db.resolve().parent
-    # Zwei Backups derselben Aktion in derselben Sekunde: "x" legt nur neu an,
-    # das zweite bekommt eine Nummer statt das erste zu überschreiben. Die
+    # Zwei Dateien derselben Aktion in derselben Sekunde: "x" legt nur neu an,
+    # die zweite bekommt eine Nummer statt die erste zu überschreiben. Die
     # Nummer steht vor der Aktion, damit "hdfs-acl-backup-*-<aktion>.csv"
     # (latest_backup in test.sh/migrate.sh) weiter passt.
     for number in itertools.count(1):
         suffix = "" if number == 1 else f"-{number}"
-        backup = folder / f"hdfs-acl-backup-{stamp}{suffix}-{label}.csv"
+        backup = folder / f"hdfs-acl-{kind}-{stamp}{suffix}-{label}.csv"
         try:
             file = backup.open("x", newline="")
         except FileExistsError:
             continue
         break
     with file:
-        # ';' als Trenner, weil die ACL-Werte selbst ',' und '|' enthalten
-        writer = csv.writer(file, delimiter=";", lineterminator="\n")
-        writer.writerow(["path", "old", "new", "empty"])
-        for change in changes:
-            empty = ",".join(name for name, value in (("old", change.old), ("new", change.new))
-                             if value == "")
-            writer.writerow([change.path, change.old or "", change.new or "", empty])
+        write_changes(file, changes)
     return backup
 
 

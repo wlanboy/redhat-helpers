@@ -229,6 +229,83 @@ class CommandTest(unittest.TestCase):
         rc, _, err = self.run_main("remove", "@a", "--new-owner", "a", "--live")
         self.assertEqual(rc, 1)
 
+    # --- plan -----------------------------------------------------------------
+
+    def plans(self) -> list:
+        return sorted(self.dir.glob("hdfs-acl-plan-*.csv"))
+
+    def test_plan_add_uses_db_only(self):
+        save(self.db, "/fs", "user.acl", 2, "test", NODES)
+        self.hdfs.nodes["/fs/account1"] = "@jemand|"  # HDFS weicht ab, plan liest es nicht
+        rc, out, _ = self.run_main("plan", "add", "@client3", "@newapp", "--accounts")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("neu: @client3|@test1=1,@test2=2,@newapp=19", out)
+        self.assertIn("2 Pfade betroffen.", out)
+        self.assertEqual(self.hdfs.writes, 0)
+        self.assertEqual(self.backups(), [])
+        (plan,) = self.plans()
+        self.assertTrue(plan.name.endswith("-add-newapp.csv"), plan.name)
+        self.assertIn(f"Plan: {plan}", out)
+        self.assertEqual([(c.path, c.old, c.new) for c in read_backup(str(plan))], [
+            ("/fs/account1", NODES["/fs/account1"], "@client3|@test1=1,@test2=2,@newapp=19"),
+            ("/fs/account1/container2", NODES["/fs/account1/container2"],
+             "@o|@client3=1,.cn=ops,ou=groups,dc=firma=3,@newapp=1"),
+        ])
+
+    def test_plan_matches_backup_and_restores(self):
+        # Plan auf der DB == Backup des echten Laufs; restore nimmt den Plan
+        save(self.db, "/fs", "user.acl", 2, "test", NODES)
+        target = self.dir / "plan.csv"
+        rc, _, _ = self.run_main("plan", "replace", "@client3", "@newapp", "--accounts", "-o", str(target))
+        self.assertEqual(rc, 0)
+        self.assertEqual(self.plans(), [])
+        rc, _, _ = self.run_main("replace", "@client3", "@newapp", "--live", "--accounts", "--apply")
+        self.assertEqual(rc, 0)
+        (backup,) = self.backups()
+        self.assertEqual(target.read_text(), backup.read_text())
+        rc, out, _ = self.run_main("restore", str(target), "--live", "--apply")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.hdfs.nodes, NODES)
+
+    def test_plan_scope_from_db(self):
+        # --account und der Default "nur Container" gelten wie bei add, mit base_dir aus der DB
+        save(self.db, "/data", "user.acl", 2, "test",
+             {path.replace("/fs", "/data", 1): raw for path, raw in NODES_TWO.items()})
+        rc, out, _ = self.run_main("plan", "add", "@client3", "@newapp", "--account", "account2")
+        self.assertEqual(rc, 0, out)
+        self.assertIn("1 Pfade betroffen.", out)
+        self.assertIn("/data/account2/container1\n", out)
+        rc, out, _ = self.run_main("plan", "replace", "@test1", "@newapp")
+        self.assertIn("@test1 steht in keiner ACL eines Containers", out)
+        self.assertEqual(len(self.plans()), 1)
+
+    def test_plan_remove_owner_skipped(self):
+        save(self.db, "/fs", "user.acl", 2, "test", NODES)
+        rc, out, err = self.run_main("plan", "remove", "@client3")
+        self.assertEqual(rc, 2)
+        self.assertIn("ist Besitzer von 1 Pfaden", err)
+        self.assertIn("1 Pfade betroffen.", out)
+        (plan,) = self.plans()
+        self.assertEqual([c.path for c in read_backup(str(plan))], ["/fs/account1/container2"])
+
+    def test_plan_nothing_to_do(self):
+        save(self.db, "/fs", "user.acl", 2, "test", NODES)
+        rc, out, _ = self.run_main("plan", "add", "@test1", "@client3", "--accounts")
+        self.assertEqual(rc, 0)
+        self.assertIn("Keine Änderungen nötig.", out)
+        self.assertEqual(self.plans(), [])
+
+    def test_plan_errors(self):
+        rc, _, err = self.run_main("plan", "add", "@a", "@b")
+        self.assertEqual(rc, 1)
+        self.assertIn("erst 'collect' ausführen", err)
+        rc, _, err = self.run_main("plan", "replace", "@a", "a")
+        self.assertEqual(rc, 1)
+        self.assertIn("ALT und NEU sind gleich", err)
+        for argv in (["plan"], ["plan", "add", "@a", "@b", "--apply"], ["plan", "remove", "@a", "--live"]):
+            with self.subTest(argv=argv), redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                build_parser().parse_args(argv)
+
     # --- lesende Kommandos ----------------------------------------------------
 
     def test_read_commands(self):

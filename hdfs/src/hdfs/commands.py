@@ -7,6 +7,8 @@ und zeigen nur, was in den ACLs selbst steht, nichts Geerbtes.
     2. plan_*():   Liste Change berechnen (changes.py)
     3. recheck():  die betroffenen Pfade live nachlesen, dann neu planen
     4. execute():  Plan zeigen, mit --apply Backup + schreiben + nachprüfen
+plan add/replace/remove macht nur Schritt 2, auf dem Stand der DB und ohne
+HDFS, und schreibt den Plan als CSV im Format der Backups.
 """
 
 from __future__ import annotations
@@ -24,7 +26,14 @@ from hdfs.fsimage import find_fsimage
 from hdfs.hdfs_client import Hdfs, write_script
 from hdfs.output import output
 from hdfs.permissions import active
-from hdfs.store import open_db, read_backup, save, write_backup
+from hdfs.store import (
+    load_nodes,
+    open_db,
+    read_backup,
+    save,
+    write_backup,
+    write_changes,
+)
 
 
 def base_dir(value: str) -> str:
@@ -137,6 +146,19 @@ def recheck(args: argparse.Namespace, hdfs: Hdfs, nodes: dict, paths: list) -> d
     return nodes
 
 
+def show_changes(changes: list) -> None:
+    """Sortiert die Changes und zeigt je Pfad alt/neu (execute und plan)."""
+    changes.sort(key=lambda c: natural_key(c.path))
+    for change in changes:
+        print(change.path)
+        print(f"  alt: {change.old if change.old is not None else '(kein Attribut)'}")
+        print(f"  neu: {change.new if change.new is not None else '(Attribut entfernen)'}")
+    if changes:
+        print(f"{len(changes)} Pfade betroffen.")
+    else:
+        print("Keine Änderungen nötig.")
+
+
 def execute(args: argparse.Namespace, hdfs: Hdfs, label: str, changes: list,
             nodes: dict, source: str) -> int:
     """Gemeinsamer Ablauf aller ändernden Kommandos.
@@ -148,15 +170,9 @@ def execute(args: argparse.Namespace, hdfs: Hdfs, label: str, changes: list,
     und mit dem geplanten Wert vergleichen. Die DB bekommt die gelesenen Werte.
     Exit-Code 1, wenn ein Aufruf fehlschlug oder ein Wert nicht stimmt.
     """
-    changes.sort(key=lambda c: natural_key(c.path))
-    for change in changes:
-        print(change.path)
-        print(f"  alt: {change.old if change.old is not None else '(kein Attribut)'}")
-        print(f"  neu: {change.new if change.new is not None else '(Attribut entfernen)'}")
+    show_changes(changes)
     if not changes:
-        print("Keine Änderungen nötig.")
         return 0
-    print(f"{len(changes)} Pfade betroffen.")
     if args.generate:
         # Backup auch hier: wer das Skript ausführt, kann danach mit restore zurück
         backup = write_backup(Path(args.db), label, changes)
@@ -324,12 +340,47 @@ def scope_note(args: argparse.Namespace) -> str:
     return note
 
 
-def cmd_add(args: argparse.Namespace) -> int:
+# Argumente prüfen, bevor etwas eingelesen wird; gemeinsam für add/replace/remove
+# und plan add/replace/remove
+
+
+def add_request(args: argparse.Namespace) -> tuple:
+    """(QUELLE, NEU, Recht oder None) für add."""
     source, new = client_id(args.source), client_id(args.new)
     if source == new:
         raise UsageError("QUELLE und NEU sind gleich.")
     # --permission: NEU bekommt überall dieses Recht statt der Bits von QUELLE
     perm = active().parse(args.permission) if args.permission is not None else None
+    return source, new, perm
+
+
+def replace_request(args: argparse.Namespace) -> tuple:
+    """(ALT, NEU) für replace."""
+    old, new = client_id(args.old), client_id(args.new)
+    if old == new:
+        raise UsageError("ALT und NEU sind gleich.")
+    return old, new
+
+
+def remove_request(args: argparse.Namespace) -> tuple:
+    """(clientid, neuer Besitzer oder None) für remove."""
+    clientid = client_id(args.clientid)
+    new_owner = owner_id(args.new_owner) if args.new_owner else None
+    if new_owner == clientid:
+        raise UsageError(f"--new-owner {new_owner} ist die clientid, die entfernt werden soll.")
+    return clientid, new_owner
+
+
+def report_owned(clientid: str, owned: list) -> None:
+    """remove: Pfade, an denen clientid Besitzer ist und die ohne --new-owner bleiben."""
+    print(f"Übersprungen: {clientid} ist Besitzer von {len(owned)} Pfaden (--new-owner angeben):",
+          file=sys.stderr)
+    for path in sorted(owned, key=natural_key):
+        print(f"  {path}", file=sys.stderr)
+
+
+def cmd_add(args: argparse.Namespace) -> int:
+    source, new, perm = add_request(args)
     hdfs = Hdfs(args.parallel, args.hadoop_version)
     nodes, origin = refresh(args, hdfs)
     changes, _ = plan_add(migration_scope(args, nodes), source, new, perm)
@@ -342,9 +393,7 @@ def cmd_add(args: argparse.Namespace) -> int:
 
 
 def cmd_replace(args: argparse.Namespace) -> int:
-    old, new = client_id(args.old), client_id(args.new)
-    if old == new:
-        raise UsageError("ALT und NEU sind gleich.")
+    old, new = replace_request(args)
     hdfs = Hdfs(args.parallel, args.hadoop_version)
     nodes, origin = refresh(args, hdfs)
     nodes = recheck(args, hdfs, nodes,
@@ -357,10 +406,7 @@ def cmd_replace(args: argparse.Namespace) -> int:
 
 
 def cmd_remove(args: argparse.Namespace) -> int:
-    clientid = client_id(args.clientid)
-    new_owner = owner_id(args.new_owner) if args.new_owner else None
-    if new_owner == clientid:
-        raise UsageError(f"--new-owner {new_owner} ist die clientid, die entfernt werden soll.")
+    clientid, new_owner = remove_request(args)
     hdfs = Hdfs(args.parallel, args.hadoop_version)
     nodes, origin = refresh(args, hdfs)
     changes, owned = plan_remove(nodes, clientid, new_owner)
@@ -368,10 +414,7 @@ def cmd_remove(args: argparse.Namespace) -> int:
     changes, owned = plan_remove(nodes, clientid, new_owner)
     rc = execute(args, hdfs, f"remove-{clientid[1:]}", changes, nodes, origin)
     if owned:
-        print(f"Übersprungen: {clientid} ist Besitzer von {len(owned)} Pfaden (--new-owner angeben):",
-              file=sys.stderr)
-        for path in sorted(owned, key=natural_key):
-            print(f"  {path}", file=sys.stderr)
+        report_owned(clientid, owned)
         # Exit-Code 2 = teilweise erledigt; ein echter Fehler (1) hat Vorrang
         return rc or 2
     return rc
@@ -392,3 +435,52 @@ def cmd_restore(args: argparse.Namespace) -> int:
             print(f"  {conflict}", file=sys.stderr)
         return rc or 2
     return rc
+
+
+def cmd_plan(args: argparse.Namespace) -> int:
+    """plan add/replace/remove: Plan auf dem Stand der DB, ohne HDFS, als CSV.
+
+    Die CSV hat das Format der Backups (path;old;new;empty). Läuft die
+    Änderung danach mit --apply, dreht restore mit dieser Datei die geplanten
+    Pfade zurück; Pfade, die das echte Kommando anders geschrieben hat (es
+    liest live nach), meldet restore als Konflikt, statt sie anzufassen.
+    """
+    owned, owner = [], ""  # owner: remove ohne --new-owner, für report_owned
+    if args.action == "add":
+        source, new, perm = add_request(args)
+        nodes, meta = load_nodes(Path(args.db))
+        # migration_scope und selected_accounts lesen den Basisordner aus args
+        args.base_dir = meta["base_dir"]
+        changes, found = plan_add(migration_scope(args, nodes), source, new, perm)
+        if not found:
+            print(f"{source} steht in keiner ACL{scope_note(args)}.")
+            return 0
+        label = f"add-{new[1:]}"
+    elif args.action == "replace":
+        old, new = replace_request(args)
+        nodes, meta = load_nodes(Path(args.db))
+        args.base_dir = meta["base_dir"]
+        changes = plan_replace(migration_scope(args, nodes), old, new)
+        if not changes:
+            print(f"{old} steht in keiner ACL{scope_note(args)}.")
+            return 0
+        label = f"replace-{old[1:]}-{new[1:]}"
+    else:
+        clientid, new_owner = remove_request(args)
+        nodes, meta = load_nodes(Path(args.db))
+        changes, owned = plan_remove(nodes, clientid, new_owner)
+        label, owner = f"remove-{clientid[1:]}", clientid
+
+    show_changes(changes)
+    if changes:
+        if args.output:
+            target = Path(args.output)
+            with target.open("w", newline="") as file:
+                write_changes(file, changes)
+        else:
+            target = write_backup(Path(args.db), label, changes, kind="plan")
+        print(f"Plan: {target}  (Stand der DB vom {meta['collected_at']}, nichts geschrieben)")
+    if owned:
+        report_owned(owner, owned)
+        return 2
+    return 0

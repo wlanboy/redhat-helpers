@@ -20,6 +20,9 @@ Kommandos:
                       mit --account NAME nur unter diesem Account)
   remove CLIENTID     clientid aus allen ACLs entfernen
   restore BACKUP      Änderungen aus einer Backup-Datei zurückdrehen
+  plan add|replace|remove ...
+                      Trockenlauf nur auf der DB, ohne HDFS: alt/neu je Pfad
+                      zeigen und als CSV im Format der Backups ablegen
 
 Eingelesen wird das neueste fsimage_<txid> im Ordner der DB (siehe hdfs.md),
 ohne Last auf dem NameNode. --live liest stattdessen direkt aus HDFS.
@@ -51,6 +54,7 @@ from hdfs.commands import (
     cmd_collect,
     cmd_count,
     cmd_export,
+    cmd_plan,
     cmd_remove,
     cmd_replace,
     cmd_restore,
@@ -71,6 +75,29 @@ def positive_int(value: str) -> int:
     if number < 1:
         raise argparse.ArgumentTypeError(f"erwartet eine ganze Zahl ab 1, nicht '{value}'")
     return number
+
+
+def add_arguments(p: argparse.ArgumentParser) -> None:
+    """Argumente von add, auch für plan add."""
+    p.add_argument("source", metavar="QUELLE", help="vorhandene clientid")
+    p.add_argument("new", metavar="NEU", help="clientid, die dieselben Rechte bekommt")
+    p.add_argument("--permission", metavar="RECHT",
+                   help="NEU bekommt überall, wo QUELLE steht, dieses Recht statt der Bits "
+                        "von QUELLE, als Zahl oder Namen: 3, READ_WRITE")
+
+
+def replace_arguments(p: argparse.ArgumentParser) -> None:
+    """Argumente von replace, auch für plan replace."""
+    p.add_argument("old", metavar="ALT", help="clientid, die verschwindet")
+    p.add_argument("new", metavar="NEU", help="clientid, die ihre Stelle einnimmt")
+
+
+def remove_arguments(p: argparse.ArgumentParser) -> None:
+    """Argumente von remove, auch für plan remove."""
+    p.add_argument("clientid")
+    p.add_argument("--new-owner", help="neuer Besitzer, wo CLIENTID Besitzer ist (sonst übersprungen): "
+                                       "clientid (@ wird ergänzt) oder Gruppe als "
+                                       "'.' und voller DN, z. B. .cn=admins,ou=groups,dc=firma")
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -155,24 +182,16 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = sub.add_parser("add", parents=[db_opts, hdfs_opts, scope_opts, write_opts],
                        help="clientid ergänzen (Migration)")
-    p.add_argument("source", metavar="QUELLE", help="vorhandene clientid")
-    p.add_argument("new", metavar="NEU", help="clientid, die dieselben Rechte bekommt")
-    p.add_argument("--permission", metavar="RECHT",
-                   help="NEU bekommt überall, wo QUELLE steht, dieses Recht statt der Bits "
-                        "von QUELLE, als Zahl oder Namen: 3, READ_WRITE")
+    add_arguments(p)
     p.set_defaults(func=cmd_add)
 
     p = sub.add_parser("replace", parents=[db_opts, hdfs_opts, scope_opts, write_opts],
                        help="clientid ersetzen, auch als Besitzer")
-    p.add_argument("old", metavar="ALT", help="clientid, die verschwindet")
-    p.add_argument("new", metavar="NEU", help="clientid, die ihre Stelle einnimmt")
+    replace_arguments(p)
     p.set_defaults(func=cmd_replace)
 
     p = sub.add_parser("remove", parents=[db_opts, hdfs_opts, write_opts], help="clientid entfernen")
-    p.add_argument("clientid")
-    p.add_argument("--new-owner", help="neuer Besitzer, wo CLIENTID Besitzer ist (sonst übersprungen): "
-                                       "clientid (@ wird ergänzt) oder Gruppe als "
-                                       "'.' und voller DN, z. B. .cn=admins,ou=groups,dc=firma")
+    remove_arguments(p)
     p.set_defaults(func=cmd_remove)
 
     p = sub.add_parser("restore", parents=[db_opts, hdfs_opts, write_opts],
@@ -180,6 +199,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("backup", help="hdfs-acl-backup-*.csv")
     p.add_argument("--force", action="store_true", help="auch seitdem geänderte Pfade zurücksetzen")
     p.set_defaults(func=cmd_restore)
+
+    # plan: dieselben Argumente wie add/replace/remove, aber nur die DB,
+    # keine HDFS-Optionen und kein --apply
+    plan_opts = argparse.ArgumentParser(add_help=False)
+    plan_opts.add_argument("-o", "--output", metavar="DATEI",
+                           help="CSV hierhin statt hdfs-acl-plan-<zeit>-<aktion>.csv neben der DB")
+    p = sub.add_parser("plan", help="Trockenlauf auf der DB, Plan als CSV (ohne HDFS)")
+    plan = p.add_subparsers(dest="action", required=True, metavar="AKTION")
+    p = plan.add_parser("add", parents=[db_opts, scope_opts, plan_opts], help="wie add")
+    add_arguments(p)
+    p = plan.add_parser("replace", parents=[db_opts, scope_opts, plan_opts], help="wie replace")
+    replace_arguments(p)
+    p = plan.add_parser("remove", parents=[db_opts, plan_opts], help="wie remove")
+    remove_arguments(p)
+    for p in plan.choices.values():
+        p.set_defaults(func=cmd_plan)
 
     return parser
 
