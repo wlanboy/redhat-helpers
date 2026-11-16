@@ -68,7 +68,10 @@ Nachgelesen im Quelltext von Spring Security (`acl/…/domain`, Branch `main`):
   Das Zusammenführen von Account- und Container-ACL ist ebenfalls eine Regel
   der Anwendung.
 
-Deshalb bekommt NEU bei `add` dort, wo ALT Besitzer ist, `19`.
+Eine ACL hat nur einen Besitzer. Deshalb bekommt NEU bei `add` dort, wo ALT
+Besitzer ist, einen Eintrag mit dem Verwaltungsrecht (`admin` aus der
+[Rechte-Tabelle](#rechte-tabelle)). Mit der mitgelieferten `permissions.json`
+ist das `ADMIN`.
 
 ### Rechte-Tabelle
 
@@ -265,6 +268,7 @@ des letzten `collect`, Zeitpunkt und Quelle stehen auf stderr.
 `add`, `replace`, `remove` und `restore` laufen so ab:
 
 1. Einlesen wie bei `collect` (fsimage, mit `--live` direkt) und planen.
+   Dabei wird die DB neu geschrieben, auch im Dry-Run.
 2. Die Pfade, die der Plan ändern würde, **live nachlesen** und auf deren
    aktuellen Werten neu planen. Das fsimage kann eine Stunde alt sein:
    Pfade, die sich seitdem geändert haben, werden so richtig behandelt,
@@ -298,8 +302,9 @@ Grenze des fsimage: Ein Pfad, der erst **nach** dem Checkpoint die clientid
 bekommen hat, fehlt im Plan. Nach dem nächsten Checkpoint erneut ausführen
 (alle Kommandos sind wiederholbar) oder bei wenigen Pfaden `--live` nehmen.
 
-Geändert werden nur Pfade mit eigener ACL. Container ohne ACL ändern sich
-über ihren Account automatisch mit. Einträge für User, Gruppen und andere
+Geändert werden nur Pfade mit eigener ACL. Ein Container ohne ACL erbt vom
+Account und ändert sich nur mit, wenn das Kommando den Account ändert.
+Einträge für User, Gruppen und andere
 Client-IDs bleiben Wort für Wort erhalten. In einer ACL, die geändert wird,
 fallen nur Leerzeichen um Besitzer und Einträge und leere Einträge weg
 (`@a |@b=1, ,@c=2` wird `@a|@b=1,@c=2`). ACLs ohne Änderung bleiben ganz unberührt.
@@ -308,13 +313,20 @@ fallen nur Leerzeichen um Besitzer und Einträge und leere Einträge weg
 ACL selbst stehen hat, als Besitzer oder Eintrag. Geerbte Rechte lösen nichts
 aus, ACLs ohne ALT bleiben unverändert.
 
-`add` und `replace` ändern per Default nur **Container**, also alles ab der
-zweiten Ebene unter `--base-dir`. Die Accounts (erste Ebene) bleiben
-unverändert, auch wenn ALT dort steht. Mit `--accounts` werden sie
-mitmigriert. Ohne `--accounts` bekommt NEU in Containern ohne eigene ACL
-nichts, denn sie erben vom Account, und dort steht weiter nur ALT. `remove`
-und `restore` kennen die Option nicht: `remove` ändert immer alle Ebenen,
-`restore` genau die Pfade aus dem Backup.
+`add` und `replace` haben zwei Modi:
+
+| Modus | Aufruf | geänderte Pfade |
+|---|---|---|
+| nur Container (Default) | `add ALT NEU` | alles ab der zweiten Ebene unter `--base-dir` |
+| mit Accounts | `add ALT NEU --accounts` | zusätzlich die Accounts (erste Ebene) |
+
+Im Default-Modus bleiben die Accounts unverändert, auch wenn ALT dort steht.
+NEU bekommt dann nur Rechte, wo eine Container-ACL ALT nennt. NEU fehlt in
+den Accounts, in Containern ohne eigene ACL und in Containern, deren ACL ALT
+nicht nennt, denn sie alle beziehen das Recht aus dem Account, und dort steht
+weiter nur ALT. Soll NEU überall dieselben Rechte haben wie ALT, braucht es
+`--accounts`. `remove` und `restore` kennen die Option nicht: `remove` ändert
+immer alle Ebenen, `restore` genau die Pfade aus dem Backup.
 
 `--account NAME` beschränkt `add` und `replace` auf einen Account, als Name
 (`account3`) oder Pfad (`/fs/account3`). Mehrfach angegeben gilt es für
@@ -323,31 +335,42 @@ geändert, sonst nur seine Container. Einen unbekannten Account oder einen
 Pfad, der nicht direkt unter `--base-dir` liegt, lehnt das Tool ab.
 
 ```bash
-# Migration: @newapp bekommt überall dieselben Rechte wie @client3
-hdfs-acl add @client3 @newapp            # Plan ansehen
-hdfs-acl add @client3 @newapp --apply
+# Migration: @newapp bekommt die Rechte von @client3
+hdfs-acl add @client3 @newapp            # Plan ansehen (Dry-Run, nur Container)
+hdfs-acl add @client3 @newapp --apply    # nur Container
+hdfs-acl add @client3 @newapp --accounts --apply         # Container und Accounts
 hdfs-acl add @client3 @newapp --generate add-newapp.sh   # oder: Skript statt schreiben
-hdfs-acl add @client3 @newapp --accounts --apply         # Accounts mitmigrieren
 hdfs-acl add @client3 @newapp --account account3 --apply # nur Container von account3
-hdfs-acl add @client3 @newapp --permission READ_WRITE    # überall @newapp=3, wo @client3 steht
+hdfs-acl add @client3 @newapp --permission READ_WRITE    # READ_WRITE statt der Rechte von @client3
 ```
 
+Alle Sonderfälle mit Beispielen stehen in [add-usecases.md](add-usecases.md).
+Die Masken in den Beispielen gelten für die mitgelieferte `permissions.json`.
+
 - Ist `@client3` Besitzer, bleibt es Besitzer, denn eine ACL hat nur
-  einen. `@newapp` bekommt dort einen Eintrag mit dem Recht des Besitzers,
-  also `@newapp=19`. Aus `@client3|@test1=1,@test2=2` wird
-  `@client3|@test1=1,@test2=2,@newapp=19`. Erst `replace` macht `@newapp`
-  zum Besitzer.
+  einen. `@newapp` bekommt dort einen Eintrag mit dem Verwaltungsrecht
+  (`admin` aus `permissions.json`, mitgeliefert `ADMIN`). Ist der Besitzer
+  zusätzlich gelistet, kommen die Bits dieser Einträge dazu. Aus
+  `@client3|@test1=1,@test2=2` wird `@client3|@test1=1,@test2=2,@newapp=19`.
+  Erst `replace` macht `@newapp` zum Besitzer.
 - Hat `@newapp` schon alle Bits von `@client3`, passiert nichts. Fehlen
   welche, werden sie im vorhandenen Eintrag ergänzt (`@newapp=4` und
   `@client3=1` ergibt `@newapp=5`). Entfernt wird nie ein Bit.
 - Schränkt eine Container-ACL `@client3` ein (`@client3=1`), bekommt
   `@newapp` dort denselben Eintrag. Container, die `@client3` nicht nennen,
   bleiben unverändert.
-- `--permission RECHT` (Zahl oder Name aus der Rechte-Tabelle, z. B.
-  `READ_WRITE`) gibt `@newapp` in jeder ACL, die `@client3` nennt, genau
-  dieses Recht statt der Bits von `@client3`, auch wo `@client3` Besitzer
-  ist. Aus `@client3|@test1=1` wird `@client3|@test1=1,@newapp=3`. Auch hier
-  wird nie ein Bit entfernt: ein vorhandenes `@newapp=19` bleibt.
+- Mit `--permission RECHT` (Name aus der Rechte-Tabelle, z. B. `READ_WRITE`,
+  oder Maske) zählt in jeder ACL, die `@client3` nennt, dieses Recht statt
+  der Bits von `@client3`, auch wo `@client3` Besitzer ist. `admin`
+  kommt dann nicht dazu. Aus `@client3|@test1=1` wird
+  `@client3|@test1=1,@newapp=3`. Bits, die `@newapp` dort schon hat, bleiben
+  und werden mit RECHT verodert: `@newapp=4` wird `@newapp=7`, ein
+  vorhandenes `@newapp=19` bleibt. `@newapp` hat danach mindestens RECHT,
+  nicht in jedem Fall genau RECHT.
+- Ein ungültiger Eintrag von `@client3` (Maske 0, kein Recht) zählt nicht,
+  die ACL bleibt dann unverändert. Ein ungültiger Eintrag von `@newapp` gibt
+  keine Rechte und wird durch den gültigen ersetzt
+  (`@newapp=2147483648` und `@client3=1` ergibt `@newapp=1`).
 - Mehrfach ausführen ist unschädlich.
 
 ```bash
@@ -386,13 +409,17 @@ gingen sonst verloren.
 
 Eine clientid wird in zwei Phasen migriert. In Phase 1 greifen beide, und
 die Anwendung kann umgestellt werden. Phase 2 ersetzt die alte clientid
-vollständig:
+vollständig. Beide Phasen laufen im selben Modus, hier mit `--accounts`,
+damit `@newapp` auch in den Accounts und in allem steht, was von ihnen erbt:
 
 ```bash
-hdfs-acl add @client3 @newapp --apply      # Phase 1: @newapp=19, wo @client3 Besitzer bleibt
+hdfs-acl add @client3 @newapp --accounts --apply      # Phase 1: Eintrag für @newapp, @client3 bleibt Besitzer
 # ... Anwendung auf @newapp umstellen ...
-hdfs-acl replace @client3 @newapp --apply  # Phase 2: @newapp ersetzt @client3, auch als Besitzer
+hdfs-acl replace @client3 @newapp --accounts --apply  # Phase 2: @newapp ersetzt @client3, auch als Besitzer
 ```
+
+Ohne `--accounts` gelten beide Phasen nur für Container-ACLs, die `@client3`
+nennen. Über die Accounts greift dann weiter nur `@client3`.
 
 Statt `replace` geht in Phase 2 auch `remove @client3 --new-owner @newapp`.
 Das Ergebnis hat dieselben Rechte, nur die Reihenfolge der Einträge kann
@@ -418,6 +445,31 @@ dem Backup entspricht. Pfade, die seitdem jemand anders geändert hat, werden
 Pfade, die schon den alten Wert haben, lässt `restore` stillschweigend aus.
 Ein zweites `restore` desselben Backups ist deshalb unschädlich, ebenso ein
 `restore` nach einem Teilfehler beim Schreiben.
+
+### Grenzen des Dry-Run
+
+Der Dry-Run ist jeder Aufruf von `add`, `replace`, `remove` oder `restore`
+ohne `--apply` und ohne `--generate`. Eine Option `--dry-run` gibt es nicht.
+
+- Er arbeitet nicht offline: Er braucht Hadoop-Client, `core-site.xml` und
+  fsimage und liest die betroffenen Pfade live nach (ein NameNode-RPC je
+  Pfad). Ohne HDFS plant nur `plan` (siehe [unten](#trockenlauf-mit-plan)).
+- Er schreibt die DB neu, mit dem Stand des fsimage. Die live nachgelesenen
+  Werte kommen erst mit `--apply` in die DB.
+- Er schreibt kein Backup und keine Plan-Datei.
+- `--apply` liest neu ein und plant neu. Ändert jemand HDFS zwischen Dry-Run
+  und `--apply`, weicht das Geschriebene vom gezeigten Plan ab. Was
+  geschrieben wurde, steht im Backup.
+- Live nachgelesen werden nur Pfade, die der erste Plan ändern würde. Ein
+  Pfad, der die clientid erst nach dem Checkpoint bekommen hat, fehlt. Ein
+  Pfad, der laut fsimage keine Änderung brauchte und sich seitdem geändert
+  hat, fehlt ebenfalls. Beides gilt auch für `--apply`, `--live` vermeidet es.
+- Er prüft keine Schreibrechte. Ob `setfattr` an jedem Pfad gelingt, zeigt
+  erst `--apply`.
+- Er zeigt nur ACLs, die sich ändern. Pfade außerhalb des Modus, Pfade
+  unterhalb von `--depth` und die Folgen der Vererbung fehlen in der Ausgabe.
+- Er meldet keine Formatfehler der ACLs, das macht `collect`.
+- Er endet mit Exit-Code 0, auch wenn Änderungen anstehen.
 
 ### Trockenlauf mit plan
 
@@ -629,7 +681,8 @@ prüft jede Phase. Einen Testcluster braucht das Skript nicht.
 Eine clientid lässt sich nur in zwei Phasen migrieren. Erst greifen beide,
 damit die Anwendung umgestellt werden kann. Eine ACL hat aber nur einen
 Besitzer: In Phase 1 bleibt ALT Besitzer, und NEU bekommt dort einen Eintrag
-mit dem Recht des Besitzers (`19`). Erst in Phase 2 ersetzt NEU die alte
+mit dem Verwaltungsrecht (`admin` aus `permissions.json`, mitgeliefert
+`ADMIN`). Erst in Phase 2 ersetzt NEU die alte
 clientid vollständig, auch als Besitzer.
 
 ```bash
@@ -652,7 +705,8 @@ Ablauf:
 3. **Phase 1**, `add ALT NEU` (erst Dry-Run, dann `--apply`), danach prüfen
    (`migrate_check.py --stage added`):
    - ALT hat genau die Rechte wie vorher. NEU hat in jeder ACL, die ALT
-     nennt, die Bits von ALT, mit eigenen verodert, wo ALT Besitzer ist `19`.
+     nennt, die Bits von ALT, mit eigenen verodert. Wo ALT Besitzer ist,
+     ist das `admin` plus die Bits der Einträge von ALT.
    - Der Besitzer bleibt: War ALT Besitzer, ist es weiter ALT.
    - Außer den Einträgen von NEU ist jede ACL Wort für Wort gleich, NEU
      steht höchstens einmal da.
@@ -672,7 +726,7 @@ Ablauf:
 
 Bei `@client3` ist ALT unter anderem „nur Besitzer“ (`@client3|`),
 „Besitzer zusätzlich mit `=1` gelistet“ und „Besitzer mit `=8`“ (NEU
-bekommt dort in Phase 1 `=27`). Die Rechte allein reichen für
+bekommt dort in Phase 1 `admin` und das Bit `8`). Die Rechte allein reichen für
 die Prüfung nicht: `hans|...,@newapp=19` statt `@newapp|...` gäbe
 `@newapp` dieselben Rechte, deshalb wird der Besitzer eigens geprüft.
 Mit `./migrate.sh @client3 @client4` kommen über `container51/52` beide
