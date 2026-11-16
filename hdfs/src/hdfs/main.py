@@ -14,7 +14,8 @@ Kommandos:
   show PFAD           ACL eines Pfads und die Rechte daraus
   export              Rechte je ACL als CSV (Format wie testdata/expected.csv)
   add QUELLE NEU      NEU mit den Rechten von QUELLE ergänzen (Migration),
-                      mit --permission RECHT überall mit diesem Recht
+                      mit --permission RECHT mit diesem Recht statt denen von
+                      QUELLE (Sonderfälle in add-usecases.md)
   replace ALT NEU     ALT durch NEU ersetzen, auch als Besitzer
                       (add/replace: nur Container, mit --accounts auch Accounts,
                       mit --account NAME nur unter diesem Account)
@@ -82,8 +83,8 @@ def add_arguments(p: argparse.ArgumentParser) -> None:
     p.add_argument("source", metavar="QUELLE", help="vorhandene clientid")
     p.add_argument("new", metavar="NEU", help="clientid, die dieselben Rechte bekommt")
     p.add_argument("--permission", metavar="RECHT",
-                   help="NEU bekommt überall, wo QUELLE steht, dieses Recht statt der Bits "
-                        "von QUELLE, als Zahl oder Namen: 3, READ_WRITE")
+                   help="NEU bekommt, wo QUELLE steht, dieses Recht statt der Bits von QUELLE "
+                        "(vorhandene Bits von NEU bleiben), als Zahl oder Namen: 3, READ_WRITE")
 
 
 def replace_arguments(p: argparse.ArgumentParser) -> None:

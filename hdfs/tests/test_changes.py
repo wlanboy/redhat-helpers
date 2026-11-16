@@ -29,6 +29,14 @@ class MergeEntriesTest(unittest.TestCase):
         tokens = ["@b=1", f"{OPS}=3"]
         self.assertIs(merge_entries(tokens, "@a"), tokens)
 
+    def test_invalid_masks_not_merged(self):
+        # 0 und > MAX_PERM geben keine Rechte und dürfen die Maske nicht ungültig machen
+        self.assertEqual(merge_entries(["@a=2147483648", "@b=1", "@a=0", "@a=4"], "@a"), ["@a=4", "@b=1"])
+
+    def test_only_invalid_masks_kept(self):
+        tokens = ["@a=2147483648", "@b=1"]
+        self.assertIs(merge_entries(tokens, "@a"), tokens)
+
 
 class PlanAddTest(unittest.TestCase):
     def test_source_is_owner_gets_19(self):
@@ -55,6 +63,14 @@ class PlanAddTest(unittest.TestCase):
         changes, _ = plan_add(nodes, "@client3", "@newapp")
         nodes.update(new_values(changes))
         self.assertEqual(plan_add(nodes, "@client3", "@newapp"), ([], 3))
+
+    def test_new_with_invalid_mask_gets_valid_entry(self):
+        # früher: @newapp=2147483649, wieder ungültig, und jeder Lauf schrieb erneut
+        nodes = {"/fs/a": "@o|@newapp=2147483648,@client3=1"}
+        changes, _ = plan_add(nodes, "@client3", "@newapp")
+        self.assertEqual(new_values(changes), {"/fs/a": "@o|@newapp=1,@client3=1"})
+        nodes.update(new_values(changes))
+        self.assertEqual(plan_add(nodes, "@client3", "@newapp"), ([], 1))
 
     def test_inheriting_and_unrelated_paths_untouched(self):
         nodes = {"/fs/a": None, "/fs/b": "@o|@x=1"}

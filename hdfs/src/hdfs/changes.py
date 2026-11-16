@@ -1,7 +1,7 @@
 """Änderungen planen: aus dem aktuellen Stand und einem Kommando eine Liste Change.
 
-Alle plan_*-Funktionen bekommen nodes = {pfad: roh_acl oder None}, frisch aus
-HDFS gelesen, und schreiben selbst nichts. Geschrieben wird erst in
+Alle plan_*-Funktionen bekommen nodes = {pfad: roh_acl oder None} aus dem
+fsimage, live aus HDFS oder (plan) aus der DB und schreiben selbst nichts. Geschrieben wird erst in
 commands.execute(), und nur mit --apply.
 
 Gemeinsame Regeln:
@@ -22,7 +22,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from hdfs.acl import Acl, covers, split_token
-from hdfs.permissions import active
+from hdfs.permissions import MAX_PERM, active
 
 
 @dataclass
@@ -40,9 +40,17 @@ def merge_entries(tokens: list, principal: str) -> list:
     erben in Container, deren ACL einen anderen Besitzer hat, das
     Besitzer-Recht nicht.
 
+    Verodert werden nur gültige Masken (1..MAX_PERM), wie in
+    Acl.client_entries(). Ein Eintrag mit ungültiger Maske (@a=0,
+    @a=2147483648) gibt keine Rechte und fällt weg, sobald ein gültiger
+    daneben steht. Sonst entstünde wieder eine ungültige Maske, und add
+    schriebe den Pfad bei jedem Lauf erneut. Stehen nur ungültige da,
+    bleiben sie unverändert.
+
     Beispiel: ['@a=1', '.cn=ops,dc=x=3', '@a=4'] -> ['@a=5', '.cn=ops,dc=x=3']
     """
-    perms = [perm for p, perm in map(split_token, tokens) if p == principal and perm is not None]
+    perms = [perm for p, perm in map(split_token, tokens)
+             if p == principal and perm is not None and 0 < perm <= MAX_PERM]
     if not perms:
         return tokens
     mask = 0
@@ -72,16 +80,17 @@ def plan_add(nodes: dict, source: str, new: str, perm: int | None = None) -> tup
 
     Phase 1 einer Migration: beide clientids greifen. Eine ACL hat nur einen
     Besitzer, ist QUELLE Besitzer, bleibt sie es. NEU bekommt dort einen
-    Eintrag mit dem Recht des Besitzers plus dem Verwaltungsrecht
-    (active().admin), damit NEU die ACL verwalten kann wie der Besitzer.
-    Erst replace macht NEU zum Besitzer.
+    Eintrag mit dem Besitzer-Recht (active().owner), den Bits der Einträge
+    von QUELLE und dem Verwaltungsrecht (active().admin), damit NEU die ACL
+    verwalten kann wie der Besitzer. Erst replace macht NEU zum Besitzer.
 
     Nur explizite Rechte: Gezählt werden der Besitzer und die Einträge dieser
     ACL, nichts Geerbtes. Schränkt ein Container QUELLE ein (@quelle=1),
     bekommt NEU dort denselben Eintrag.
 
-    perm gesetzt (--permission): NEU bekommt in jeder ACL, die QUELLE nennt,
-    genau diese Bits statt der von QUELLE, auch wo QUELLE Besitzer ist.
+    perm gesetzt (--permission): In jeder ACL, die QUELLE nennt, zählen diese
+    Bits statt der von QUELLE, auch wo QUELLE Besitzer ist. Bits, die NEU
+    dort schon hat, bleiben und werden mit perm verodert.
 
     Liefert (changes, found); found = Anzahl ACLs, in denen QUELLE vorkommt,
     damit der Aufrufer "QUELLE steht nirgends" von "schon alles erledigt"
@@ -99,7 +108,7 @@ def plan_add(nodes: dict, source: str, new: str, perm: int | None = None) -> tup
             continue
         found += 1
         # explizites Recht in dieser ACL: ist QUELLE Besitzer, bekommt NEU das
-        # Besitzer-Recht plus Verwaltungsrecht (=19)
+        # Besitzer-Recht (steckt in rights) plus Verwaltungsrecht
         if perm is None:
             wanted, source_owns = rights[source]
             if source_owns:
@@ -143,7 +152,8 @@ def plan_remove(nodes: dict, clientid: str, new_owner: str | None) -> tuple:
     Eine ACL braucht einen Besitzer. Ist clientid Besitzer, wird er durch
     new_owner ersetzt; ohne new_owner bleibt der Pfad unverändert und landet
     in owned, damit der Aufrufer ihn melden kann. Liefert (changes, owned).
-    new_owner == clientid ist sinnlos (die Bits über 3 gingen verloren) und
+    new_owner == clientid ist sinnlos (ihre Bits über dem Besitzer-Recht gingen
+    verloren) und
     wird abgelehnt.
     """
     if new_owner == clientid:

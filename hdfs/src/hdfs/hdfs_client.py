@@ -126,8 +126,8 @@ def parse_getfattr(output: str, attr: str) -> dict:
         # file: /fs/account1
         user.acl="@client1|@client2=3"
         user.other="..."
-    Jeder Pfad landet im Ergebnis, auch ohne Attribut (None). Das ist wichtig
-    für die Vererbung: ein Container ohne ACL muss bekannt sein, um zu erben.
+    Jeder Pfad landet im Ergebnis, auch ohne Attribut (None): Die DB soll
+    auch die Pfade ohne ACL kennen.
     """
     nodes = {}
     path = None
@@ -272,7 +272,7 @@ class Hdfs:
 
         getfattr schreibt "# file: pfad" schon vor dem Lesen der Attribute. Ein
         Pfad, dessen Attribute nicht lesbar waren (inzwischen gelöscht, keine
-        Berechtigung), sähe sonst aus wie "ohne ACL" und würde fälschlich erben.
+        Berechtigung), sähe sonst aus wie "ohne ACL".
         Er wird deshalb entfernt, sein Fehler kommt in "übersprungen". Fehler,
         zu denen kein Pfad in der Ausgabe steht (z. B. ein Ordner war beim
         Globben nicht lesbar, Kerberos-Ticket abgelaufen, NameNode nicht

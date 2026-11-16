@@ -32,10 +32,13 @@ Beispiele:
   # Rechte je ACL als CSV
   uv run main.py export -o rechte.csv
 
-  # @neu in jeder ACL, die @alt nennt, mit dessen Rechten ergänzen (erst Plan, dann schreiben)
+  # @neu in jeder Container-ACL, die @alt nennt, mit dessen Rechten ergänzen
+  # (erst Plan, dann schreiben; alle Sonderfälle in add-usecases.md)
   uv run main.py add @alt @neu
   uv run main.py add @alt @neu --apply
-  # @neu überall, wo @alt steht, mit festem Recht statt den Rechten von @alt
+  uv run main.py add @alt @neu --accounts --apply   # auch die ACLs der Accounts
+  # @neu bekommt, wo @alt steht, dieses Recht statt der Rechte von @alt
+  # (Bits, die @neu dort schon hat, bleiben)
   uv run main.py add @alt @neu --permission READ_WRITE
   export DEPTH=3 HADOOP_CONF_DIR=$PWD/namenode
   uv run main.py add @client1 @client2 --fsimage ./fsimage_0000000000000001017 --generate add-neu.sh

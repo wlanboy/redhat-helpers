@@ -1,4 +1,4 @@
-"""ACL-Format: Parsen, Prüfen, effektive Rechte und Vererbung.
+"""ACL-Format: Parsen, Prüfen und Rechte je ACL (ohne Vererbung).
 
 Format: <besitzer>|<eintrag>=<recht>,<eintrag>=<recht>,...
   besitzer/eintrag: @clientid, user (ohne Präfix) oder Gruppe: '.' und voller
