@@ -6,10 +6,18 @@ unverändert, beide clientids greifen nebeneinander. Erst `replace` oder
 `remove` nimmt QUELLE heraus (siehe [hdfs.md](hdfs.md#ändern)).
 
 ```bash
-uv run main.py add @alt @neu                     # Dry-Run, nur Container
-uv run main.py add @alt @neu --apply             # schreiben
-uv run main.py add @alt @neu --accounts --apply  # auch die Accounts
+uv run main.py add @alt @neu                          # Dry-Run: Plan zeigen, nur Container
+uv run main.py add @alt @neu --generate add-neu.sh    # Normalfall: Backup und Shell-Skript schreiben
+./add-neu.sh                                          # das Skript ändert HDFS
+uv run main.py add @alt @neu --apply                  # oder: das Tool ändert HDFS selbst
+uv run main.py add @alt @neu --accounts --generate add-neu.sh   # auch die Accounts
 ```
+
+Der Normalfall ist `--generate`. Das Tool ändert HDFS dabei nicht, es
+schreibt ein Skript mit allen Aufrufen. Das Skript lässt sich prüfen, an ein
+Change-Ticket hängen und von dem Benutzer ausführen, der in HDFS schreiben
+darf. `--apply` schreibt dieselben Werte direkt. Was in beiden Fällen wohin
+geschrieben wird, steht unter [Was der Lauf schreibt](#was-der-lauf-schreibt).
 
 ## Rechte in diesem Dokument
 
@@ -61,11 +69,95 @@ Hand migriert werden.
    Werten ein zweites Mal. Gelöschte Pfade fallen aus dem Plan. Jeder andere
    Lesefehler bricht den Lauf ab.
 4. Es zeigt je Pfad die alte und die neue ACL.
-5. Mit `--apply` schreibt es erst das Backup, dann die ACLs. Danach liest es
-   jeden geänderten Pfad zurück, vergleicht ihn mit dem Plan und schreibt die
-   DB fort. Mit `--generate DATEI` schreibt es das Backup und ein Shell-Skript,
-   HDFS und DB bleiben unverändert. Ohne beide Optionen endet der Lauf als
-   Dry-Run.
+5. Ohne weitere Option endet der Lauf hier als Dry-Run. Mit
+   `--generate DATEI` schreibt das Tool das Backup und ein Shell-Skript, mit
+   `--apply` schreibt es das Backup und ändert HDFS selbst.
+
+## Was der Lauf schreibt
+
+| Ziel | Dry-Run | `--generate DATEI` | `--apply` |
+|---|---|---|---|
+| lokale DB `hdfs-acl.db` | neu geschrieben, Stand des fsimage | neu geschrieben, Stand des fsimage | neu geschrieben, danach mit den zurückgelesenen Werten fortgeschrieben |
+| Backup `hdfs-acl-backup-<zeit>-add-<neu>.csv` neben der DB | nein | ja | ja, vor dem ersten Schreibzugriff |
+| Shell-Skript `DATEI` | nein | ja, ausführbar | nein |
+| xattr `user.acl` in HDFS | nein | nein, erst das Skript | ja |
+
+In HDFS ändert sich nur der Wert des xattr `user.acl` (bzw. `--attr`) an den
+Pfaden aus dem Plan. Jeder Pfad bekommt die vollständige neue ACL als einen
+Wert, also den alten Text mit dem ergänzten Eintrag für NEU. Dateien,
+HDFS-Rechte (`chmod`, `chown`), HDFS-eigene ACLs (`setfacl`) und andere
+xattrs fasst weder das Tool noch das Skript an. Pfade, die nicht im Plan
+stehen, bleiben unberührt.
+
+### Backup
+
+Das Backup hat eine Zeile je geändertem Pfad mit dem alten und dem neuen
+Wert. `restore` setzt damit jeden Pfad zurück, der noch den neuen Wert hat.
+
+```
+path;old;new;empty
+/fs/account1/container1;@alt|@client1=3,@client2=1;@alt|@client1=3,@client2=1,@neu=19;
+/fs/account1/container3;maria|@alt=3;maria|@alt=3,@neu=3;
+```
+
+### Mit `--generate`: das Skript
+
+Das Skript enthält einen Aufruf `hadoop fs -setfattr` je Pfad. Über jedem
+Aufruf steht die alte ACL als Kommentar, im Kopf stehen die Zahl der Pfade,
+das fsimage des Plans und das Kommando zum Zurückdrehen.
+
+```bash
+#!/usr/bin/env bash
+# hdfs-acl add-neu: 2 Pfade, erzeugt 2026-11-16T18:30:00
+# geplant auf: fsimage_0000000000000001397 (Datei vom 2026-11-11T09:55:12)
+# zurückdrehen: uv run main.py restore hdfs-acl-backup-20261116-183000-add-neu.csv --apply
+
+# Hadoop-Client: per HADOOP überschreibbar, z. B. HADOOP=/opt/hadoop/bin/hadoop
+HADOOP="${HADOOP:-hadoop}"
+failed=0
+
+# alt: @alt|@client1=3,@client2=1
+"$HADOOP" fs -setfattr -n user.acl -v '"@alt|@client1=3,@client2=1,@neu=19"' /fs/account1/container1 || failed=$((failed + 1))
+# alt: maria|@alt=3
+"$HADOOP" fs -setfattr -n user.acl -v '"maria|@alt=3,@neu=3"' /fs/account1/container3 || failed=$((failed + 1))
+
+if [ "$failed" -ne 0 ]; then
+    echo "$failed von 2 Aufrufen fehlgeschlagen" >&2
+    exit 1
+fi
+echo "OK: 2 Pfade geschrieben"
+```
+
+Für das Skript gilt:
+
+- Es braucht nur einen Hadoop-Client und Schreibrecht auf die Pfade, weder
+  das Tool noch die DB. Ein anderer Client lässt sich mit
+  `HADOOP=/pfad/zu/bin/hadoop ./add-neu.sh` wählen.
+- Es läuft nach einem Fehler weiter, zählt die fehlgeschlagenen Aufrufe und
+  endet dann mit Exit-Code 1.
+- Es startet je Pfad einen eigenen Hadoop-Client, nacheinander. Bei vielen
+  Pfaden dauert es deshalb länger als `--apply`, das Pfade mit demselben
+  neuen Wert bündelt und parallel schreibt.
+- Es schreibt die Werte, die beim Erzeugen geplant waren. Ändert jemand einen
+  Pfad zwischen Erzeugen und Ausführen, überschreibt das Skript diese
+  Änderung. Der Kommentar `# alt:` zeigt, von welchem Wert der Plan ausging.
+- Es liest nichts zurück, und das Tool erfährt nichts vom Lauf. Zur Kontrolle
+  wiederholt man danach den Dry-Run. Er muss „Keine Änderungen nötig.“
+  melden.
+- Zurückdrehen lässt sich der Lauf mit dem Backup, das beim Erzeugen
+  entstanden ist. Das Kommando steht im Kopf des Skripts.
+
+### Mit `--apply`: das Tool schreibt selbst
+
+1. Das Tool schreibt das Backup.
+2. Es setzt die neuen Werte mit `hdfs dfs -setfattr`. Pfade mit demselben
+   neuen Wert gehen gebündelt in einen Aufruf, `--parallel` Aufrufe laufen
+   gleichzeitig. Ein Fehler an einem Pfad bricht die übrigen nicht ab.
+3. Es liest jeden Pfad aus dem Plan zurück und vergleicht ihn mit dem
+   geplanten Wert. Weicht ein Wert ab oder ist ein Pfad nicht lesbar, meldet
+   es den Pfad und endet mit Exit-Code 1.
+4. Es schreibt die zurückgelesenen Werte in die DB. Die Quelle in der DB
+   heißt dann z. B. `fsimage_… + add-neu`.
 
 ## Regel je ACL
 
