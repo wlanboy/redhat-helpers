@@ -394,6 +394,9 @@ hdfs-acl replace @client3 @newapp
 hdfs-acl replace @client3 @newapp --apply
 ```
 
+Alle Sonderfälle mit Beispielen stehen in
+[replace-usecases.md](replace-usecases.md).
+
 - Besitzer `@client3` wird Besitzer `@newapp`, Einträge `@client3=x` werden
   an derselben Stelle zu `@newapp=x`.
 - Hatte `@newapp` schon einen Eintrag, bleibt einer mit den Bits beider,
