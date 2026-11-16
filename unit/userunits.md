@@ -89,3 +89,6 @@ python3 checkunits.py --since "-1h" --lines 10
 - Python >= 3.9 (Projekt-Setup via `uv`, siehe `pyproject.toml`)
 - `systemctl --user` bzw. `journalctl --user` im PATH
 - Keine root-Rechte nötig
+
+Was in User Units anders ist als in System Units, steht in
+[user-unit-limits.md](user-unit-limits.md).

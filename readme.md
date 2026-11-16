@@ -30,7 +30,9 @@ von Containern via Podman und Kubernetes-Test-Clustern via kind.
 Python-Pendant zu `manage-user-units.sh` mit mehr Funktionsumfang
 (enable/disable/delete, Namensfilter, Fehler-/Warnungs-Check per
 Journal, Unit-Generator für Java-/Python-Anwendungen). Siehe
-[unit/userunits.md](unit/userunits.md).
+[unit/userunits.md](unit/userunits.md). Was in User Units anders ist als in
+System Units, etwa das fehlende `network-online.target`, beschreibt
+[unit/user-unit-limits.md](unit/user-unit-limits.md).
 
 ### podman/
 
