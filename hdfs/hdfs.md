@@ -298,6 +298,21 @@ Aufrufe werden gezählt, das Skript läuft weiter und endet dann mit Exit-Code 1
 Das Nachprüfen aus Schritt 4 entfällt: Wiederholt man das Kommando danach
 im Dry-Run, muss es „Keine Änderungen nötig.“ melden.
 
+Was ein Lauf von `add`, `replace`, `remove` oder `restore` wohin schreibt:
+
+| Ziel | Dry-Run | `--generate DATEI` | `--apply` |
+|---|---|---|---|
+| lokale DB `hdfs-acl.db` | neu geschrieben, Stand des fsimage | neu geschrieben, Stand des fsimage | neu geschrieben, danach mit den zurückgelesenen Werten fortgeschrieben |
+| Backup `hdfs-acl-backup-<zeit>-<aktion>.csv` neben der DB | nein | ja | ja, vor dem ersten Schreibzugriff |
+| Shell-Skript `DATEI` | nein | ja, ausführbar | nein |
+| xattr `user.acl` in HDFS | nein | nein, erst das Skript | ja |
+
+In HDFS ändert sich nur der Wert des xattr `user.acl` (bzw. `--attr`) an den
+Pfaden aus dem Plan. Dateien, HDFS-Rechte (`chmod`, `chown`), HDFS-eigene
+ACLs (`setfacl`) und andere xattrs fassen weder das Tool noch das Skript an.
+Ein Beispiel für Skript und Backup steht in
+[add-usecases.md](add-usecases.md#was-der-lauf-schreibt).
+
 Grenze des fsimage: Ein Pfad, der erst **nach** dem Checkpoint die clientid
 bekommen hat, fehlt im Plan. Nach dem nächsten Checkpoint erneut ausführen
 (alle Kommandos sind wiederholbar) oder bei wenigen Pfaden `--live` nehmen.
