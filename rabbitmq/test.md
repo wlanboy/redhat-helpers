@@ -14,13 +14,16 @@ Container getestet wurden, ohne Build-VM, Runtime-VM oder Nexus.
 | Upload nach Nexus | nein | `UPLOAD=n` |
 | Erlang in anderen Pfad verschieben | ja | Tarball als zweiter User `runner` entpackt, `Install -minimal` |
 | RabbitMQ Generic-Unix mit diesem Erlang | ja | manuell gestartet mit `rabbitmq-server -detached` |
+| Plugins `rabbitmq_management`, `rabbitmq_prometheus` | ja | über `RABBITMQ_ENABLED_PLUGINS_FILE`, HTTP-API und `/metrics` abgefragt |
+| `conf.d/` und `advanced.config` außerhalb von `server/` | ja | `RABBITMQ_CONFIG_FILES`; ein Schnipsel in `conf.d` verlegt die HTTP-API auf Port 15673 |
+| `rabbitmq-upgrade drain`/`revive`, `cluster_status` als JSON | ja | auf einem Node; Grundlage für den Drain in `install-rabbitmq.sh` |
 | `install-rabbitmq.sh` | nein | Container hat kein systemd, User Unit nicht testbar |
-| `prepare-runtime.sh` | nein | braucht `loginctl`/firewalld |
+| `prepare-runtime.sh` | nein | braucht `loginctl` |
 | Cluster | nein | nur ein Node |
 
 Der Runtime-Teil bildet nach, was `install-rabbitmq.sh` tut (Entpacken,
-`Install -minimal`, `PATH`, `RABBITMQ_MNESIA_BASE`/`RABBITMQ_LOG_BASE`),
-ruft das Skript aber nicht auf.
+`Install -minimal`, `PATH` und die `RABBITMQ_*`-Variablen aus
+`rabbitmq.env`), ruft das Skript aber nicht auf.
 
 ## Vorbereitung
 
@@ -58,16 +61,25 @@ T=$(ls /tmp/erlang-*.tar.gz)
 ls -la $T
 
 # 3. Als runner in einen anderen Pfad entpacken, verschieben, RabbitMQ starten
-su - runner -c "set -e; mkdir -p x/erl x/srv
+su - runner -c "set -e; mkdir -p x/erl x/srv x/etc/conf.d
 tar -C x/erl -xzf $T && cd x/erl/erlang-* && ./Install -minimal \$PWD >/dev/null && cd
 curl -fsSL -o r.tar.xz https://github.com/rabbitmq/rabbitmq-server/releases/download/v4.3.6/rabbitmq-server-generic-unix-4.3.6.tar.xz
 tar -C x/srv -xJf r.tar.xz
+echo '[rabbitmq_management,rabbitmq_prometheus].' > x/etc/enabled_plugins
+echo 'management.tcp.port = 15673' > x/etc/conf.d/10-test.conf
 export PATH=\$(echo \$HOME/x/erl/erlang-*/bin):\$HOME/x/srv/rabbitmq_server-4.3.6/sbin:\$PATH
 export RABBITMQ_MNESIA_BASE=\$HOME/data RABBITMQ_LOG_BASE=\$HOME/log
+export RABBITMQ_ENABLED_PLUGINS_FILE=\$HOME/x/etc/enabled_plugins
+export RABBITMQ_CONFIG_FILES=\$HOME/x/etc/conf.d RABBITMQ_ADVANCED_CONFIG_FILE=\$HOME/x/etc/advanced.config
 rabbitmq-server -detached
 sleep 5
 rabbitmqctl -q await_startup --timeout 120
 rabbitmq-diagnostics -q status | head -20
+echo '--- plugins'; rabbitmq-plugins -q list -E
+echo '--- mgmt api (Port aus conf.d)'; curl -fsS -u guest:guest http://localhost:15673/api/overview | head -c 200; echo
+echo '--- prometheus'; curl -fsS http://localhost:15692/metrics | grep -c '^rabbitmq_'
+echo '--- cluster_status json'; rabbitmq-diagnostics -q cluster_status --formatter json | grep -o '\"running_nodes\":\[[^]]*\]'
+echo '--- drain/revive'; rabbitmq-upgrade drain; rabbitmq-upgrade revive
 rabbitmqctl -q list_queues"
 ```
 
@@ -93,24 +105,39 @@ Smoke-Test aus `build-erlang.sh`:
 
 ```
 == Smoke-Test ==
-OTP 27, ERTS 15.2.7.13, JIT: jit, OpenSSL 3.5.8 25 Aug 2026
+OTP 27, ERTS 15.2.7.14, JIT: jit, OpenSSL 3.5.9 29 Sep 2026
 == Packe Tarball ==
 
 Erzeugt:
-  /home/builder/build/erlang/dist/erlang-27.3.4.18-el9-x86_64.tar.gz
-  /home/builder/build/erlang/dist/erlang-27.3.4.18-el9-x86_64.tar.gz.sha256
+  /home/builder/build/erlang/dist/erlang-27.3.4.19-el9-x86_64.tar.gz
+  /home/builder/build/erlang/dist/erlang-27.3.4.19-el9-x86_64.tar.gz.sha256
 ```
 
 Der Tarball ist rund 60 MB groß. RabbitMQ als `runner` aus dem verschobenen
-Erlang:
+Erlang (gekürzt):
 
 ```
 RabbitMQ version: 4.3.6
-Node name: rabbit@ff287f06a37b
-Erlang configuration: Erlang/OTP 27 [erts-15.2.7.13] [source] [64-bit] [smp:16:16] [ds:16:16:10] [async-threads:1] [jit:ns]
-Crypto library: OpenSSL 3.5.8 25 Aug 2026
+Node name: rabbit@72193d556051
+Erlang configuration: Erlang/OTP 27 [erts-15.2.7.14] [source] [64-bit] [smp:12:12] [ds:12:12:10] [async-threads:1] [jit:ns]
+Crypto library: OpenSSL 3.5.9 29 Sep 2026
+--- plugins
+[E*] rabbitmq_management 4.3.6
+[E*] rabbitmq_prometheus 4.3.6
+--- mgmt api (Port aus conf.d)
+{"management_version":"4.3.6","rates_mode":"basic",...
+--- prometheus
+290
+--- cluster_status json
+"running_nodes":["rabbit@72193d556051"]
+--- drain/revive
+Will put node rabbit@72193d556051 into maintenance mode. The node will no longer serve any client traffic!
+Will put node rabbit@72193d556051 back into regular operating mode. The node will again serve client traffic and host primary queue replicas.
 exit=0
 ```
+
+Das Management- und das Prometheus-Plugin laufen also auch mit einem
+Erlang ohne debugger, observer und et.
 
 ## Im Test gefundene und behobene Fehler
 
@@ -134,10 +161,14 @@ Zwei weitere Fehlläufe lagen am Testskript selbst: fehlende Leserechte von
 
 Auf einer Runtime-VM mit systemd noch zu prüfen:
 
-- `prepare-runtime.sh` (Lingering, firewalld)
+- `prepare-runtime.sh` (Lingering, `systemctl --user`)
 - `install-rabbitmq.sh` mit Downloads über Nexus
 - User Unit mit `Type=notify`: meldet sich RabbitMQ per sd_notify als
   gestartet, bevor `TimeoutStartSec` greift?
 - `systemctl --user stop rabbitmq` beendet Broker und epmd sauber
 - Neustart der VM: startet die Unit dank Lingering ohne Login
 - Cluster aus drei Nodes mit gemeinsamem Cookie
+- Cluster-Bildung per `classic_config` mit `ENABLE=n`
+- Upgrade im Cluster: `install-rabbitmq.sh` erkennt die laufenden Nodes,
+  wartet per `await_online_quorum_plus_one` (wird `-t` beachtet?) und
+  leert den Node per `drain`, der Node ist nach dem Restart wieder aktiv

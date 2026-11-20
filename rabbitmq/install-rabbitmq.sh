@@ -13,12 +13,18 @@
 #     Nexus GitHub-Proxy, prüft optional SHA256 und GPG-Signatur
 #   - Symlinks erlang/current und server/current auf die neuen Versionen
 #     (alte Versionen bleiben liegen, Upgrade = Skript mit neuer Version)
-#   - legt rabbitmq.conf und enabled_plugins an, falls nicht vorhanden
+#   - legt rabbitmq.conf, enabled_plugins und etc/conf.d/ an, falls nicht
+#     vorhanden (advanced.config wird gelesen, wenn es in etc/ liegt)
 #   - schreibt etc/rabbitmq.env (PATH + RABBITMQ_*-Variablen) neu
 #   - setzt ~/.erlang.cookie (ERLANG_COOKIE oder interaktiv, für Cluster
 #     auf allen Nodes identisch)
 #   - schreibt ~/.config/systemd/user/rabbitmq.service und bietet
-#     daemon-reload + enable --now an (ohne Nachfrage: ENABLE=j bzw. ENABLE=n)
+#     daemon-reload + enable + restart an (ohne Nachfrage: ENABLE=j bzw. ENABLE=n)
+#   - läuft der Dienst schon und hat der Cluster mehr als einen laufenden
+#     Node, wartet das Skript vor dem Restart, bis die Quorum Queues den
+#     Node entbehren können (await_online_quorum_plus_one), und versetzt
+#     ihn per "rabbitmq-upgrade drain" in den Maintenance Mode. Nach dem
+#     Restart ist der Node automatisch wieder aktiv. Abschalten: DRAIN=n
 #
 # Verzeichnis: $RABBITMQ_BASE (Default: /opt/local/rabbitmq). Muss vorher
 #              als root angelegt werden und dem User gehören.
@@ -173,11 +179,17 @@ if [[ ! -f "${ETC_DIR}/enabled_plugins" ]]; then
     echo "Angelegt: ${ETC_DIR}/enabled_plugins"
 fi
 
+# Zusätzliche Config-Schnipsel (*.conf, alphabetisch nach rabbitmq.conf
+# geladen). Liegen außerhalb von server/, damit sie Upgrades überleben.
+mkdir -p "${ETC_DIR}/conf.d"
+
 # Wird bei jedem Lauf neu geschrieben. Format ist sowohl für systemd
 # (EnvironmentFile) als auch für "set -a; . rabbitmq.env" in der Shell gültig.
 cat > "${ETC_DIR}/rabbitmq.env" <<EOF
 PATH=${BASE}/erlang/current/bin:${BASE}/server/current/sbin:/usr/local/bin:/usr/bin:/bin
 RABBITMQ_CONFIG_FILE=${ETC_DIR}/rabbitmq.conf
+RABBITMQ_CONFIG_FILES=${ETC_DIR}/conf.d
+RABBITMQ_ADVANCED_CONFIG_FILE=${ETC_DIR}/advanced.config
 RABBITMQ_ENABLED_PLUGINS_FILE=${ETC_DIR}/enabled_plugins
 RABBITMQ_MNESIA_BASE=${BASE}/data
 RABBITMQ_LOG_BASE=${BASE}/log
@@ -245,6 +257,24 @@ DO_ENABLE=${DO_ENABLE:-J}
 if [[ "$DO_ENABLE" =~ ^[JjYy]$ ]]; then
     systemctl --user daemon-reload
     systemctl --user enable rabbitmq.service
+    if [[ "${DRAIN:-j}" =~ ^[JjYy]$ ]] && systemctl --user is-active --quiet rabbitmq.service; then
+        # Subshell mit der Umgebung des Brokers (PATH auf Erlang und CLI)
+        (
+            set -a; . "${ETC_DIR}/rabbitmq.env"; set +a
+            RUNNING=$(rabbitmq-diagnostics -q cluster_status --formatter json \
+                | grep -o '"running_nodes":\[[^]]*\]' | grep -o '"[^"]*@[^"]*"' | wc -l) || true
+            if [[ "${RUNNING:-0}" -gt 1 ]]; then
+                echo "== Cluster mit ${RUNNING} laufenden Nodes: Node vor dem Restart leeren =="
+                # Bricht nach DRAIN_TIMEOUT Sekunden ab, dann kein Restart
+                rabbitmq-upgrade -t "${DRAIN_TIMEOUT:-600}" await_online_quorum_plus_one || {
+                    echo "Fehler: Quorum Queues/Streams würden ohne diesen Node ihr Quorum verlieren." >&2
+                    echo "Kein Restart. Andere Nodes prüfen: rabbitmq-diagnostics cluster_status" >&2
+                    exit 1
+                }
+                rabbitmq-upgrade drain
+            fi
+        )
+    fi
     systemctl --user restart rabbitmq.service
     systemctl --user --no-pager status rabbitmq.service || true
 fi

@@ -83,7 +83,7 @@ else
     warn "'$SHORT' nicht auflösbar (für Cluster DNS oder /etc/hosts nötig)"
 fi
 
-# Benötigte Ports (firewalld, als root freigeben):
+# Benötigte Ports (im Netz zwischen Nodes bzw. zu den Clients erreichbar):
 #   4369         epmd (Erlang Port Mapper, Cluster)
 #   5672         AMQP
 #   5671         AMQPS (AMQP über TLS)
@@ -95,8 +95,9 @@ fi
 echo
 if [[ $FAILED -eq 0 ]]; then
     echo "Alles vorhanden. Weiter mit: rabbitmq/install-rabbitmq.sh"
-    echo "Hinweis: Für einen Cluster Ports 4369, 25672 und 35672-35682 zwischen"
-    echo "         den Nodes öffnen, für Clients 5672/5671, 15672, 15692."
+    echo "Hinweis: Für einen Cluster müssen Ports 4369, 25672 und 35672-35682"
+    echo "         zwischen den Nodes erreichbar sein, für Clients 5672/5671,"
+    echo "         15672, 15692."
     exit 0
 fi
 
