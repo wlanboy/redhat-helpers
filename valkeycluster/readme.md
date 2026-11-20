@@ -21,12 +21,15 @@ Minimum sind 3 Primaries. Mit 1 Replica pro Primary und 3 VMs:
    └───────────────┘  └───────────────┘  └───────────────┘
 ```
 
-`valkey-cli --cluster create` verteilt die Replicas so, dass sie nicht auf
-derselben VM wie ihre Primary liegen, sofern die VMs unterschiedliche
-Adressen haben. Die ersten N/(Replicas+1) Einträge in
-`VALKEY_CLUSTER_NODES` werden Primaries, deshalb zuerst je eine Instanz
-pro VM aufführen. Fällt eine ganze VM aus, übernehmen die Replicas auf den
-anderen VMs.
+`valkey-cli --cluster create` gruppiert die Einträge in
+`VALKEY_CLUSTER_NODES` nach Host und nimmt sie reihum: erst den ersten
+Eintrag jeder VM, dann den zweiten usw. Daraus werden die ersten
+N/(Replicas+1) Primaries, die Replicas legt es auf andere VMs als ihre
+Primary. Die Primaries sind also über die VMs verteilt, egal in welcher
+Reihenfolge die VMs aufgeführt sind. Pro VM wird der zuerst genannte Port
+Primary. Dafür muss jede VM in der Liste immer unter derselben Adresse
+stehen (nicht einmal Hostname, einmal IP). Fällt eine ganze VM aus,
+übernehmen die Replicas auf den anderen VMs.
 
 ## Dateien
 
@@ -83,6 +86,14 @@ Die Node-Liste kann auch fest in `cluster.conf` eingetragen werden.
 `systemctl --user` braucht eine echte Login-Session (SSH direkt als User
 oder `machinectl shell valkey@`), nicht `su -` oder `sudo -u`.
 
+Ein vorgegebenes Passwort darf weder `"` noch `\` enthalten.
+
+Nicht im selben `VALKEY_BASE` wie eine Einzelinstanz aus `valkey/`
+installieren. Beide nutzen `etc/auth.conf`, `etc/valkey.env` und
+`server/current`. Findet das Skript eine `auth.conf` ohne `masterauth`,
+bricht es ab, weil sich die Replicas sonst nicht an ihrer Primary anmelden
+können.
+
 Verzeichnisse unter `/opt/local/valkey` (änderbar per `VALKEY_BASE`):
 
 ```
@@ -97,9 +108,26 @@ Verzeichnisse unter `/opt/local/valkey` (änderbar per `VALKEY_BASE`):
 └── downloads/
 ```
 
-`nodes.conf` schreibt Valkey selbst. Nicht von Hand ändern. Wer eine
-Instanz komplett neu aufsetzen will, stoppt sie, leert `data/`, startet sie
-und nimmt sie per `valkey-cli --cluster add-node` wieder auf.
+`nodes.conf` schreibt Valkey selbst. Nicht von Hand ändern.
+
+Eine Instanz komplett neu aufsetzen (z.B. vm1:7002 als Replica):
+
+```bash
+valkeycluster/cluster.sh nodes      # Node-ID von vm1:7002 und ihrer Primary notieren
+systemctl --user stop valkey-cluster@7002
+rm -rf /opt/local/valkey/instances/7002/data && mkdir /opt/local/valkey/instances/7002/data
+systemctl --user start valkey-cluster@7002
+# alte ID auf allen übrigen Nodes vergessen (Einstieg über eine andere Instanz)
+valkey-cli --cluster call vm2:7001 cluster forget <alte-id>
+valkey-cli --cluster add-node vm1:7002 vm2:7001 \
+    --cluster-replica --cluster-primary-id <id-der-primary>
+```
+
+Die neu gestartete Instanz bekommt eine neue Node-ID. Die alte bliebe sonst
+als `fail` im Cluster stehen. `--cluster call` schickt `CLUSTER FORGET` an
+alle Nodes. `--cluster del-node` taugt hier nicht, es würde die neue
+Instanz unter derselben Adresse herunterfahren. Ohne `--cluster-replica`
+kommt die Instanz als leere Primary ohne Slots dazu.
 
 ## Betrieb
 
@@ -117,11 +145,13 @@ Clients müssen Cluster-fähig sein (z.B. Lettuce/Jedis im Cluster-Modus,
 Spring Data Redis mit `spring.data.redis.cluster.nodes`) und brauchen
 mindestens einige der Instanzen als Seed-Liste.
 
-Nach einem Failover bleibt die frühere Replica Primary. Zurück auf die
-ursprüngliche Verteilung (auf der gewünschten Primary, einer Replica):
+Nach einem Failover bleibt die frühere Replica Primary, die alte Primary
+kommt als Replica zurück. Für die ursprüngliche Verteilung `cluster failover`
+auf der Instanz ausführen, die wieder Primary werden soll. Im Beispiel oben
+nach Ausfall von vm1 also auf vm1, Port 7001:
 
 ```bash
-valkey-cli -p 7002 cluster failover
+valkey-cli -p 7001 cluster failover
 ```
 
 ## Upgrade
@@ -131,6 +161,10 @@ Neue Version in `valkey/versions.conf` eintragen und
 Instanzen nacheinander neu und wartet jeweils, bis die Instanz geladen hat.
 Vor der nächsten VM `cluster.sh check` abwarten, bis alle Nodes wieder
 `[OK]` melden. Rollback: `current` zurücksetzen und die Units neu starten.
+Das klappt nur, wenn die ältere Version das RDB/AOF-Format der neueren
+lesen kann. Aus demselben Grund kann eine Replica mit älterer Version
+nicht von einer Primary mit neuerem RDB-Format synchronisieren. Vor einem Upgrade über eine Minor- oder
+Major-Version `instances/*/data/` sichern.
 
 Ports aus `VALKEY_PORTS` entfernen stoppt keine laufende Instanz. Erst per
 `valkey-cli --cluster del-node` aus dem Cluster nehmen, dann

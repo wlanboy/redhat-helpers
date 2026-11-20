@@ -116,7 +116,7 @@ fi
 if ldd "$SERVER_BIN" 2>&1 | grep -q 'not found'; then
     echo "Fehler: valkey-server vermisst Bibliotheken:" >&2
     ldd "$SERVER_BIN" 2>&1 | grep 'not found' >&2
-    echo "Benötigt: glibc >= 2.34, openssl-libs 3.x, systemd-libs, zlib, libzstd" >&2
+    echo "Benötigt: glibc >= 2.34, openssl-libs 3.x, systemd-libs" >&2
     exit 1
 fi
 "$SERVER_BIN" --version
@@ -134,6 +134,12 @@ if [[ ! -f "${ETC_DIR}/auth.conf" ]]; then
     if [[ -z "$NEW_PASS" ]]; then
         NEW_PASS=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32 || true)
         echo "Neues Passwort erzeugt: grep requirepass ${ETC_DIR}/auth.conf"
+    fi
+    # In auth.conf steht das Passwort in "...". Anführungszeichen und
+    # Backslash würden das Format brechen.
+    if [[ "$NEW_PASS" == *[\"\\]* ]]; then
+        echo "Fehler: Passwort darf weder \" noch \\ enthalten." >&2
+        exit 1
     fi
     (umask 077; printf 'requirepass "%s"\n' "$NEW_PASS" > "${ETC_DIR}/auth.conf")
     echo "Angelegt: ${ETC_DIR}/auth.conf"

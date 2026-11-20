@@ -130,7 +130,7 @@ fi
 if ldd "$SERVER_BIN" 2>&1 | grep -q 'not found'; then
     echo "Fehler: valkey-server vermisst Bibliotheken:" >&2
     ldd "$SERVER_BIN" 2>&1 | grep 'not found' >&2
-    echo "Benötigt: glibc >= 2.34, openssl-libs 3.x, systemd-libs, zlib, libzstd" >&2
+    echo "Benötigt: glibc >= 2.34, openssl-libs 3.x, systemd-libs" >&2
     exit 1
 fi
 "$SERVER_BIN" --version
@@ -151,10 +151,24 @@ if [[ ! -f "$AUTH_FILE" ]]; then
         NEW_PASS=$(tr -dc 'A-Za-z0-9' < /dev/urandom | head -c 32 || true)
         echo "Neues Passwort erzeugt. Für weitere VMs: grep requirepass $AUTH_FILE"
     fi
+    # In auth.conf steht das Passwort in "...". Anführungszeichen und
+    # Backslash würden das Format brechen.
+    if [[ "$NEW_PASS" == *[\"\\]* ]]; then
+        echo "Fehler: Passwort darf weder \" noch \\ enthalten." >&2
+        exit 1
+    fi
     (umask 077; printf 'requirepass "%s"\nmasterauth "%s"\n' "$NEW_PASS" "$NEW_PASS" > "$AUTH_FILE")
     echo "Angelegt: $AUTH_FILE"
 else
     echo "Vorhanden, unverändert: $AUTH_FILE"
+    # z.B. von valkey/install-valkey.sh im selben VALKEY_BASE angelegt
+    if ! grep -q '^masterauth ' "$AUTH_FILE"; then
+        echo "Fehler: $AUTH_FILE enthält kein masterauth, Replicas könnten sich" >&2
+        echo "        nicht an ihrer Primary anmelden. Eintragen (gleiches Passwort):" >&2
+        echo "  masterauth \"<Passwort aus requirepass>\"" >&2
+        echo "  Oder eigenes VALKEY_BASE für den Cluster nutzen." >&2
+        exit 1
+    fi
 fi
 
 for p in "${PORTS[@]}"; do

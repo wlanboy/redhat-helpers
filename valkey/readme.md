@@ -2,9 +2,9 @@
 
 Valkey wird nicht gebaut. Genutzt wird der fertige Ubuntu-22.04-Build (jammy)
 von `download.valkey.io`. Er läuft auf RHEL 9, weil er nur glibc 2.34,
-OpenSSL 3 und libsystemd braucht (dazu zlib und libzstd, auf RHEL 9
-Standard). jemalloc ist statisch gelinkt. `install-valkey.sh` prüft die
-Bibliotheken per `ldd`.
+OpenSSL 3 und libsystemd braucht (Stand 9.1.2: höchstens `GLIBC_2.34` und
+`OPENSSL_3.0.0`). jemalloc ist statisch gelinkt. `install-valkey.sh` prüft
+die Bibliotheken per `ldd`.
 
 ## Dateien
 
@@ -56,6 +56,13 @@ VALKEY_PASSWORD=... ENABLE=j valkey/install-valkey.sh   # ohne Rückfragen
 `systemctl --user` braucht eine echte Login-Session (SSH direkt als User
 oder `machinectl shell valkey@`), nicht `su -` oder `sudo -u`.
 
+Ein vorgegebenes Passwort darf weder `"` noch `\` enthalten, das Skript
+bricht sonst ab.
+
+Valkey und [valkeycluster](../valkeycluster/readme.md) nicht im selben
+`VALKEY_BASE` installieren. Beide nutzen `etc/auth.conf`, `etc/valkey.env`
+und `server/current`.
+
 Verzeichnisse unter `/opt/local/valkey` (änderbar per `VALKEY_BASE`):
 
 ```
@@ -84,3 +91,8 @@ ausführen. Die neue Version wird neben die alte entpackt, `current`
 umgebogen und der Dienst neu gestartet. `data/` und `etc/` bleiben
 erhalten. Rollback: `current` zurücksetzen und
 `systemctl --user restart valkey`.
+
+Ein Rollback auf eine ältere Version klappt nur, wenn diese das
+RDB/AOF-Format der neueren lesen kann. Sonst startet sie mit einem Fehler
+beim Laden. Vor einem Upgrade über eine Minor- oder Major-Version deshalb
+`data/` sichern (nach `valkey-cli --askpass save`).
