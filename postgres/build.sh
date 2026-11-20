@@ -6,7 +6,8 @@
 # verschiebbaren Tarball für die Runtime-VMs (kein Compilieren):
 #   - lädt postgresql<MAJOR>{,-libs,-server,-contrib}-<PG_VERSION>-<PG_RPM_RELEASE>
 #     über den Nexus-Proxy auf download.postgresql.org und prüft die
-#     RPM-Signatur gegen den PGDG-Key (User-eigene rpm-Datenbank, kein root)
+#     RPM-Signatur gegen den PGDG-Key (SHA256 fest in versions.conf,
+#     User-eigene rpm-Datenbank, kein root)
 #   - entpackt die RPMs per rpm2archive (ohne sie zu installieren) und
 #     übernimmt nur /usr/pgsql-<MAJOR> als postgresql-<PG_VERSION>/
 #   - schreibt BUILD_INFO (Version, RPM-Release, SHA256 der RPMs)
@@ -66,14 +67,26 @@ done
 if [[ "$PG_GPG_CHECK" =~ ^[JjYy]$ ]]; then
     KEY_FILE="${DL_DIR}/$(basename "$PG_GPG_KEY_PATH")"
     download "${NEXUS_PGDG}/${PG_GPG_KEY_PATH}" "$KEY_FILE"
+    # Der Key kommt über denselben Weg wie die RPMs. Ohne festen Hash könnte
+    # ein manipulierter Proxy Key und RPMs gemeinsam austauschen.
+    if ! echo "${PG_GPG_KEY_SHA256}  ${KEY_FILE}" | sha256sum -c --quiet -; then
+        echo "Fehler: SHA256 von $(basename "$KEY_FILE") passt nicht zu PG_GPG_KEY_SHA256," >&2
+        echo "        Datei wird gelöscht (siehe versions.conf)." >&2
+        rm -f "$KEY_FILE"
+        exit 1
+    fi
     # Eigene rpm-Datenbank nur für die Prüfung, die System-DB bleibt unberührt
     KEY_DB="${DL_DIR}/rpmdb"
     rm -rf "$KEY_DB"
     mkdir -p "$KEY_DB"
     rpmkeys --dbpath "$KEY_DB" --import "$KEY_FILE"
     for f in "${RPMS[@]}"; do
-        if ! rpmkeys --dbpath "$KEY_DB" -K "$f"; then
-            echo "Fehler: Signatur von $(basename "$f") ungültig, Datei wird gelöscht." >&2
+        # rpmkeys -K endet bei einem unsignierten RPM mit 0 ("digests OK"),
+        # deshalb muss "signatures OK" ausdrücklich in der Ausgabe stehen.
+        out=$(rpmkeys --dbpath "$KEY_DB" -K "$f" 2>&1) || true
+        echo "$out"
+        if [[ "$out" != *"signatures OK"* ]]; then
+            echo "Fehler: $(basename "$f") nicht gültig signiert, Datei wird gelöscht." >&2
             rm -f "$f"
             exit 1
         fi

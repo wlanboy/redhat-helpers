@@ -14,7 +14,8 @@
 #     oder zufällig erzeugt, landet in ~/.pgpass)
 #   - legt etc/postgresql.conf und etc/pg_hba.conf einmalig an, danach
 #     eigene Pflege
-#   - schreibt etc/postgres.env (PATH, LD_LIBRARY_PATH, PGHOST, ...) neu
+#   - schreibt etc/postgres.env (systemd) und etc/postgres.sh (Shell) mit
+#     PATH, LD_LIBRARY_PATH, PGHOST, ... neu
 #   - schreibt ~/.config/systemd/user/postgres.service (Type=notify) und
 #     bietet daemon-reload + enable --now an (ohne Nachfrage: ENABLE=j bzw.
 #     ENABLE=n)
@@ -105,7 +106,9 @@ else
     rm -rf "$TMP_DIR"
     trap - EXIT
 fi
-[[ -f "${SRV_DIR}/BUILD_INFO" ]] && grep -E '^(PG_RPM_RELEASE|BUILD_DATE)=' "${SRV_DIR}/BUILD_INFO"
+if [[ -f "${SRV_DIR}/BUILD_INFO" ]]; then
+    grep -E '^(PG_RPM_RELEASE|BUILD_DATE)=' "${SRV_DIR}/BUILD_INFO" || true
+fi
 
 # ------------------------------------------------------------- Bibliotheken
 
@@ -122,7 +125,8 @@ MISSING_LIBS=$(
         case "$(basename "$f")" in
             *plperl*|*plpython*|pgxml.so) continue ;;
         esac
-        LD_LIBRARY_PATH="${SRV_DIR}/lib" ldd "$f" 2>/dev/null | awk '/not found/{print $1}'
+        # ldd scheitert bei Shell-Skripten in bin/, das ist kein Fehler
+        { LD_LIBRARY_PATH="${SRV_DIR}/lib" ldd "$f" 2>/dev/null || true; } | awk '/not found/{print $1}'
     done | sort -u
 )
 if [[ -n "$MISSING_LIBS" ]]; then
@@ -155,8 +159,8 @@ ln -sfn "$SRV_DIR" "${BASE}/server/current"
 
 echo "== Konfiguration in ${ETC_DIR} =="
 
-# Wird bei jedem Lauf neu geschrieben. Format ist sowohl für systemd
-# (EnvironmentFile) als auch für "set -a; . postgres.env" in der Shell gültig.
+# Beide Dateien werden bei jedem Lauf neu geschrieben.
+# postgres.env: für systemd (EnvironmentFile), setzt einen festen PATH.
 cat > "${ETC_DIR}/postgres.env" <<EOF
 PATH=${BASE}/server/current/bin:/usr/local/bin:/usr/bin:/bin
 LD_LIBRARY_PATH=${BASE}/server/current/lib
@@ -168,6 +172,20 @@ PGDATABASE=postgres
 PG_BASE=${BASE}
 EOF
 echo "Geschrieben: ${ETC_DIR}/postgres.env"
+
+# postgres.sh: für die Shell (". postgres.sh", z.B. in ~/.bashrc). Ergänzt
+# PATH und LD_LIBRARY_PATH, statt sie zu ersetzen.
+cat > "${ETC_DIR}/postgres.sh" <<EOF
+export PATH="${BASE}/server/current/bin\${PATH:+:\$PATH}"
+export LD_LIBRARY_PATH="${BASE}/server/current/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+export PGDATA="${DATA_DIR}"
+export PGHOST="${RUN_DIR}"
+export PGPORT="${PORT}"
+export PGUSER="${SUPERUSER}"
+export PGDATABASE=postgres
+export PG_BASE="${BASE}"
+EOF
+echo "Geschrieben: ${ETC_DIR}/postgres.sh"
 
 if [[ ! -f "${ETC_DIR}/postgresql.conf" ]]; then
     cat > "${ETC_DIR}/postgresql.conf" <<EOF
@@ -342,5 +360,5 @@ echo "  Daten:      $DATA_DIR"
 echo "  Logs:       ${BASE}/log/"
 echo
 echo "psql in der Shell nutzen (z.B. in ~/.bashrc):"
-echo "  set -a; . ${ETC_DIR}/postgres.env; set +a"
+echo "  . ${ETC_DIR}/postgres.sh"
 echo "  psql -c 'select version()'"
